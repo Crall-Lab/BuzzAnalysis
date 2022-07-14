@@ -8,7 +8,7 @@ Buzz analysis contains code for analysing data from BombusBox rigs.
 - python3 (tested in Python 3.8.5)
 - numpy
 - pandas
-
+- scipy
 
 python3 should come preinstalled in unix systems but if not, they can be installed with
 ```
@@ -16,12 +16,12 @@ sudo apt-get install python3
 ```
 
 - pip (or pip3, if native python is not python 3)
-- python modules: numpy, pandas
+- python modules: numpy, pandas, scipy
 
-To install numpy and pandas, you will need pip or pip3. To install the requirements:
+To install numpy, pandas, and scipy, you will need pip or pip3. To install the requirements:
 ```
 sudo apt install pip3
-pip3 install numpy pandas
+pip3 install numpy pandas scipy
 ```
 
 <br><br>
@@ -39,7 +39,7 @@ As an example, to run the analysis (distance to social center) on the sample dat
 python3 ./baseFunctions.py . distSC meanAct meanSpeed True
 ```
 
-The results of the analysis can then be found in *Analysis.csv* within the BuzzAnalysis folder.
+The results of the analysis can then be found in *Analysis.csv* within the BuzzAnalysis folder. The results from each test called will occupy one cell in *Analysis.csv*.
 
 <br><br>
 
@@ -50,11 +50,16 @@ The results of the analysis can then be found in *Analysis.csv* within the BuzzA
 
 <br><br>
 
+## Parameters
+All avaliable tests except trackedFrames and distSC require user-provided parameters. These are stored in params.py, and should be chosen by the user for each experiment.
+
 ## Adding your own tests
 To add your own custom analysis, simply add the relevant code into *baseFunctions.py*. You will then be able to call it from command line. For example:
 ```
 python3 ./baseFunctions.py . customTest False
-``` 
+```
+
+Any parameters custom tests call can be added into *params.py*. They can then be called as params.*parameter*.
 
 <br><br>
 ## Maintainers
