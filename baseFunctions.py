@@ -1,24 +1,22 @@
 #!/usr/bin/env python3 -u
 
-"""Converts all old files into new format. All .csv files in folder are targets."""
+"""Runs analysis that is independent of nest structure data."""
 
-__appname__ = 'TRACPATHS.py'
-__author__ = 'Acacia Tang (tst116@ic.ac.uk)'
+__appname__ = 'baseFunctions.py'
+__author__ = 'Acacia Tang (ttang53@wisc.edu)'
 __version__ = '0.0.1'
 
 import pandas as pd
 import os
 import sys
 import numpy as np
-import pandas as pd
-import os
 import params #THIS IS NOT A PACKAGE?
 import baseFunctions
 
-def nest_social_center(trackingResults):
+def nest_social_center(oneID):
     """Generic function to calculate the nest social center from standard pandas array with centroid coordinates."""
-    mean_x = np.nanmean(trackingResults['centroidX'].to_numpy())
-    mean_y = np.nanmean(trackingResults['centroidY'].to_numpy())
+    mean_x = np.nanmean(oneID['centroidX'].to_numpy())
+    mean_y = np.nanmean(oneID['centroidY'].to_numpy())
     return (mean_x, mean_y)
 
 def distSC_id(oneID):
@@ -31,11 +29,13 @@ def distSC_id(oneID):
     return mean_scd
 
 def distSC(trackingResults):
-    dist = []
-    for id in trackingResults.ID.unique():
-        oneID = trackingResults[trackingResults.ID == id]
-        dist.append(distSC_id(oneID))
+    dist = pd.Series(index = trackingResults.LR.unique(), dtype='float64')
+    for lr in trackingResults.LR.unique():
+        oneID = trackingResults[trackingResults.LR == lr]
+        dist[lr] = distSC_id(oneID)
     return dist
+
+
 
 def main(argv):
     """Main entry point of program. For takes in the path to a folder and a list of functions to run. Results will be written to Analysis.csv in the current directory."""
@@ -45,7 +45,7 @@ def main(argv):
             if "mjpeg" in f:
                 vids.append(os.path.join(dir,f))
 
-    output = pd.DataFrame(columns = ['worker', 'Date', 'Time', 'ID'].append(argv[2]))
+    output = pd.DataFrame(columns = ['worker', 'Date', 'Time', 'ID']+argv[2:-1])
     for v in vids:
         workerID = v.split("worker")[1].split("-")[0]
         Date, Time = v.split("_")
@@ -54,27 +54,38 @@ def main(argv):
         try:
             trackingResults = pd.read_csv(v.replace(".mjpeg", ".csv"))
         
-        except:
+        except Exception as e:
+            print("Error: cannot read " + v.replace(".mjpeg", ".csv"))
+            print(e)
             existingData = [workerID, Date, Time]
-            addOn = ["" for i in range(len(argv[2])+1)]
+            addOn = ["" for i in range(len(argv[2:-1])+1)]
             row = existingData + addOn
-            analysis = pd.DataFrame([row], columns = ['worker', 'Date', 'Time', 'ID']+argv[2])
+            analysis = pd.DataFrame([row], columns = ['worker', 'Date', 'Time', 'ID']+argv[2:-1])
             analysis.worker = workerID
             analysis.Date = Date
             analysis.Time = Time
             output = pd.concat([output, analysis], ignore_index=True, axis = 0)
             continue
-
-        analysis = pd.DataFrame(index=trackingResults.ID.unique().tolist(), columns=['worker', 'Date', 'Time', 'ID']+argv[2])
+        
+        if argv[-1] == "True":
+            trackingResults['LR'] = (trackingResults['centroidX'] < np.nanmean(trackingResults['centroidX'].to_numpy()))
+            trackingResults['LR'][trackingResults['LR']] = "Left"
+            trackingResults['LR'][trackingResults['LR'] != "Left"] = "Right"
+            LR = ["Left", "Right"]
+        else:
+            LR = ["Whole"]
+        analysis = pd.DataFrame(index=LR, columns=['worker', 'Date', 'Time', 'ID']+argv[2:-1])
         analysis.worker = workerID
         analysis.Date = Date
         analysis.Time = Time
         analysis.ID = analysis.index
-        for test in argv[2]:
+        for test in argv[2:-1]:
             try:
+                analysis[test] = 0
                 analysis[test] = getattr(baseFunctions, test)(trackingResults)
-            except:
-                print(test + " cannot be run")
+            except Exception as e:
+                print(test + " cannot be run on " + v.replace(".mjpeg", ".csv"))
+                print(e)
                 continue
     
         output = pd.concat([output, analysis], ignore_index=True, axis = 0)
