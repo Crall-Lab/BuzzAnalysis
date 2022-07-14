@@ -13,29 +13,51 @@ import numpy as np
 import params #THIS IS NOT A PACKAGE?
 import baseFunctions
 
-def nest_social_center(oneID):
+def runTestLR(trackingResults, test):
+    """Calculates average distance to social center of a hive."""
+    metric = pd.Series(index = trackingResults.LR.unique(), dtype='float64')
+    for lr in trackingResults.LR.unique():
+        oneLR = trackingResults[trackingResults.LR == lr]
+        metric[lr] = test(oneLR)
+    return metric
+
+def nest_social_center(oneLR):
     """Generic function to calculate the nest social center from standard pandas array with centroid coordinates."""
-    mean_x = np.nanmean(oneID['centroidX'].to_numpy())
-    mean_y = np.nanmean(oneID['centroidY'].to_numpy())
+    mean_x = np.nanmean(oneLR['centroidX'].to_numpy())
+    mean_y = np.nanmean(oneLR['centroidY'].to_numpy())
     return (mean_x, mean_y)
 
-def distSC_id(oneID):
+def distSC(oneLR):
     """Given dataframe, return 1-D array containing average distance to social center."""
-    sc = nest_social_center(oneID)
-    xd = oneID['centroidX'] - sc[0]
-    yd = oneID['centroidY'] - sc[1]
+    sc = nest_social_center(oneLR)
+    xd = oneLR['centroidX'] - sc[0]
+    yd = oneLR['centroidY'] - sc[1]
     tot_d = np.sqrt(xd**2 + yd**2)
     mean_scd = np.nanmean(tot_d, axis=0)
     return mean_scd
 
-def distSC(trackingResults):
-    dist = pd.Series(index = trackingResults.LR.unique(), dtype='float64')
-    for lr in trackingResults.LR.unique():
-        oneID = trackingResults[trackingResults.LR == lr]
-        dist[lr] = distSC_id(oneID)
-    return dist
+def movement_metrics(oneLR):
+    speed = pd.Series(dtype = "float64")
+    for id in oneLR.ID.unique():
+        oneID = oneLR[oneLR["ID"] == id]
+        speedID = np.sqrt(oneID['centroidX'].diff()**2 + oneID['centroidY'].diff()**2)/oneID['frame'].diff() #to be discussed
+        speed = pd.concat([speed, speedID])
+    act = speed > params.digital_noise_speed_cutoff
+    act = 1*act
+    act[np.isnan(speed)] = np.nan
+    return act, speed
 
+def meanAct(oneLR):
+    """Gives mean ratio of time spent moving"""
+    act = movement_metrics(oneLR)[0]
+    return np.nanmean(act, axis=0)
 
+def meanSpeed(oneLR):
+    """Gives mean moving speed"""
+    act, speed = movement_metrics(oneLR)
+    moving_speed =speed
+    moving_speed[act != 1] = np.nan #For moving speed matrix, replace all frames where bees are not detected as moving with nans
+    return np.nanmean(moving_speed, axis=0)
 
 def main(argv):
     """Main entry point of program. For takes in the path to a folder and a list of functions to run. Results will be written to Analysis.csv in the current directory."""
@@ -69,10 +91,11 @@ def main(argv):
         
         if argv[-1] == "True":
             trackingResults['LR'] = (trackingResults['centroidX'] < np.nanmean(trackingResults['centroidX'].to_numpy()))
-            trackingResults['LR'][trackingResults['LR']] = "Left"
-            trackingResults['LR'][trackingResults['LR'] != "Left"] = "Right"
+            trackingResults.loc[trackingResults['LR'], 'LR'] = "Left"
+            trackingResults.loc[trackingResults['LR'] != "Left", 'LR'] = "Right"
             LR = ["Left", "Right"]
         else:
+            trackingResults['LR'] = "Whole"
             LR = ["Whole"]
         analysis = pd.DataFrame(index=LR, columns=['worker', 'Date', 'Time', 'ID']+argv[2:-1])
         analysis.worker = workerID
@@ -82,7 +105,7 @@ def main(argv):
         for test in argv[2:-1]:
             try:
                 analysis[test] = 0
-                analysis[test] = getattr(baseFunctions, test)(trackingResults)
+                analysis[test] = runTestLR(trackingResults, getattr(baseFunctions, test))
             except Exception as e:
                 print(test + " cannot be run on " + v.replace(".mjpeg", ".csv"))
                 print(e)

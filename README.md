@@ -36,17 +36,24 @@ python3 ./baseFunctions.py [path to folder holding tracking results] [tests] [wh
 
 As an example, to run the analysis (distance to social center) on the sample data provided:
 ```
-python3 ./baseFunctions.py . distSC True
+python3 ./baseFunctions.py . distSC meanAct meanSpeed True
 ```
 
 The results of the analysis can then be found in *Analysis.csv* within the BuzzAnalysis folder.
 
 <br><br>
 
+## Avaliable tests
+- distSC: Gives mean distance to social center of a hive
+- meanAct: Gives mean ratio of time spent moving
+- meanSpeed: Gives mean moving speed
+
+<br><br>
+
 ## Adding your own tests
 To add your own custom analysis, simply add the relevant code into *baseFunctions.py*. You will then be able to call it from command line. For example:
 ```
-python3 ./baseFunctions.py . distSC customTest False
+python3 ./baseFunctions.py . customTest False
 ``` 
 
 <br><br>
