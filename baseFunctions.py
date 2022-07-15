@@ -15,17 +15,14 @@ from scipy import spatial
 import params
 import baseFunctions
 
-#To run any test
-def runTestLR(trackingResults, test):
-    """Calculates average distance to social center of a hive."""
-    metric = pd.Series(index = trackingResults.LR.unique(), dtype='float64')
-    for lr in trackingResults.LR.unique():
-        oneLR = trackingResults[trackingResults.LR == lr]
-        metric[lr] = test(oneLR)
-    return metric
-
-
 #Called functions
+def restructure_tracking_data(rawOneLR):
+    """Take centroid data from aruco-tracking structured output, rearrange and interpolate missing data"""
+    #Drop any duplicate rows
+    rawOneLR = rawOneLR.drop_duplicates(subset=['ID', 'frame'])
+    xs = rawOneLR.pivot(index="frame", columns='ID', values = ['centroidX', 'centroidY'])
+    return xs.interpolate(method='linear', limit=2, axis='index', limit_direction='both')
+
 def nest_social_center(oneLR):
     """Generic function to calculate the nest social center from standard pandas array with centroid coordinates."""
     mean_x = np.nanmean(oneLR['centroidX'].to_numpy())
@@ -34,14 +31,11 @@ def nest_social_center(oneLR):
 
 def movement_metrics(oneLR):
     """Returns two pd.Series(), act is whether a bee is moving in a frame, speed is the speed of a bee in a frame."""
-    speed = pd.Series(dtype = "float64")
-    for id in oneLR.ID.unique():
-        oneID = oneLR[oneLR["ID"] == id]
-        speedID = np.sqrt(oneID['centroidX'].diff()**2 + oneID['centroidY'].diff()**2)/oneID['frame'].diff() #to be discussed
-        speed = pd.concat([speed, speedID])
+    speed = np.sqrt(oneLR['centroidX'].diff(axis=0)**2 + oneLR['centroidY'].diff(axis=0)**2)
     act = speed > params.digital_noise_speed_cutoff
     act = 1*act
     act[np.isnan(speed)] = np.nan
+
     return act, speed
 
 def extract_bee_locs(oneLR, fn):
@@ -67,7 +61,7 @@ def interbee_distance_matrix(oneLR):
     return inter_bee_dist
 
 
-#Tests
+#Tests (all tests should be vectorized)
 def trackedFrames(oneLR):
     """Calculates number of frames where at least one tags is detected"""
     return np.sum(~np.isnan(oneLR['centroidX']))
@@ -95,6 +89,9 @@ def meanSpeed(oneLR):
 
 def meanIBD(oneLR):
     """Calculates mean distance to other bees in cm."""
+    if len(oneLR.columns) == 2:
+        print("No interactions possible, only one tag found in video.")
+        return None
     ib_dists = interbee_distance_matrix(oneLR)
     ib_dist_mean = np.nanmean(ib_dists, axis=0)
     self_ind = ib_dist_mean == 0
@@ -104,6 +101,9 @@ def meanIBD(oneLR):
 
 def totalInt(oneLR):
     """Calculates total number of interactions between bees in a video."""
+    if len(oneLR.columns) == 2:
+        print("No interactions possible, only one tag found in video.")
+        return None
     ib_dists = interbee_distance_matrix(oneLR)
     for fn in range(len(ib_dists)):
         frame_dists= ib_dists[fn]
@@ -118,8 +118,11 @@ def totalInt(oneLR):
     
     return np.nansum(int_sums, axis=0)
 
-def totIntFrames(oneLR):
+def totalIntFrames(oneLR):
     """Calculates number of frames in a video where at least one interaction is detected."""
+    if len(oneLR.columns) == 2:
+        print("No interactions possible, only one tag found in video.")
+        return None
     ib_dists = interbee_distance_matrix(oneLR)
     ib_dist_mean = np.nanmean(ib_dists, axis=0)
     self_ind = ib_dist_mean == 0
@@ -150,7 +153,7 @@ def main(argv):
             if "mjpeg" in f:
                 vids.append(os.path.join(dir,f))
 
-    output = pd.DataFrame(columns = ['worker', 'Date', 'Time', 'ID']+argv[2:-1])
+    output = pd.DataFrame()
     for v in vids:
         workerID = v.split("worker")[1].split("-")[0]
         Date, Time = v.split("_")
@@ -165,7 +168,7 @@ def main(argv):
             existingData = [workerID, Date, Time]
             addOn = ["" for i in range(len(argv[2:-1])+1)]
             row = existingData + addOn
-            analysis = pd.DataFrame([row], columns = ['worker', 'Date', 'Time', 'ID']+argv[2:-1])
+            analysis = pd.DataFrame([row], columns = ['worker', 'Date', 'Time', 'LR', 'ID']+argv[2:-1])
             analysis.worker = workerID
             analysis.Date = Date
             analysis.Time = Time
@@ -176,25 +179,34 @@ def main(argv):
             trackingResults['LR'] = (trackingResults['centroidX'] < np.nanmean(trackingResults['centroidX'].to_numpy()))
             trackingResults.loc[trackingResults['LR'], 'LR'] = "Left"
             trackingResults.loc[trackingResults['LR'] != "Left", 'LR'] = "Right"
-            LR = ["Left", "Right"]
         else:
             trackingResults['LR'] = "Whole"
-            LR = ["Whole"]
-        analysis = pd.DataFrame(index=LR, columns=['worker', 'Date', 'Time', 'ID']+argv[2:-1])
-        analysis.worker = workerID
-        analysis.Date = Date
-        analysis.Time = Time
-        analysis.ID = analysis.index
-        for test in argv[2:-1]:
-            try:
-                analysis[test] = 0
-                analysis[test] = runTestLR(trackingResults, getattr(baseFunctions, test))
-            except Exception as e:
-                print(test + " cannot be run on " + v.replace(".mjpeg", ".csv"))
-                print(e)
-                continue
-    
-        output = pd.concat([output, analysis], ignore_index=True, axis = 0)
+        fullAnalysis = pd.DataFrame()
+        datasets = trackingResults.groupby('LR')
+        for name, rawOneLR in datasets:
+            analysis = pd.DataFrame(index = rawOneLR.ID.unique())
+            analysis['LR'] = name
+            analysis['ID'] = analysis.index
+            oneLR = restructure_tracking_data(rawOneLR)
+            for test in argv[2:-1]:
+                try:
+                    analysis[test] = None
+                    analysis[test] = getattr(baseFunctions, test)(oneLR)
+                except Exception as e:
+                    print(test + " cannot be run on " + v.replace(".mjpeg", ".csv"))
+                    analysis[test] = None
+                    print(e)
+                    continue
+            fullAnalysis = pd.concat([fullAnalysis, analysis], axis = 0)
+        
+        oneVid =  pd.DataFrame(index = fullAnalysis.index)    
+        oneVid['pi_ID'] = workerID
+        oneVid['bee_ID'] = oneVid.index
+        oneVid['Date'] = Date
+        oneVid['Time'] = Time
+        oneVid = pd.concat([oneVid, fullAnalysis], axis = 1)
+
+        output = pd.concat([output, oneVid], ignore_index=True, axis = 0)
 
     output.to_csv(path_or_buf = "Analysis.csv")
     return 0

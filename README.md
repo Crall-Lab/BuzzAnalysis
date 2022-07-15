@@ -44,9 +44,13 @@ The results of the analysis can then be found in *Analysis.csv* within the BuzzA
 <br><br>
 
 ## Avaliable tests
+- trackedFrames: Gives number of frames a bee is found in
 - distSC: Gives mean distance to social center of a hive
 - meanAct: Gives mean ratio of time spent moving
 - meanSpeed: Gives mean moving speed
+- mean_IBD: Gives mean distance to other bees in cm
+- totalInt: Gives total number of interactions between bees in a video
+- totalIntFrames: Gives number of frames in a video where at least one interaction is detected.
 
 <br><br>
 
