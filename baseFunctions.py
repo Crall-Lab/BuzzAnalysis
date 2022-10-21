@@ -147,6 +147,7 @@ def totalIntFrames(oneLR):
 
 def main(argv):
     """Main entry point of program. For takes in the path to a folder and a list of functions to run. Results will be written to Analysis.csv in the current directory."""
+    argv = [0, '/media/apis/Backup Plus/knockOut/', 'trackedFrames', 'distSC', 'meanAct', 'meanSpeed', 'meanIBD', 'totalInt', 'totalIntFrames']
     vids=[]
     for dir, subdir, files in os.walk(argv[1]):
         for f in files:
@@ -167,9 +168,9 @@ def main(argv):
             print("Error: cannot read " + v.replace(".mjpeg", ".csv"))
             print(e)
             existingData = [workerID, Date, Time]
-            addOn = ["" for i in range(len(argv[2:-1])+1)]
+            addOn = ["" for i in range(len(argv[2:-1])+2)]
             row = existingData + addOn
-            analysis = pd.DataFrame([row], columns = ['worker', 'Date', 'Time', 'LR', 'ID']+argv[2:-1])
+            analysis = pd.DataFrame([row], columns = ['pi_ID', 'Date', 'Time', 'LR', 'ID']+argv[2:-1])
             analysis.worker = workerID
             analysis.Date = Date
             analysis.Time = Time
