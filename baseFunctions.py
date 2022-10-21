@@ -155,8 +155,9 @@ def main(argv):
 
     output = pd.DataFrame()
     for v in vids:
-        workerID = v.split("worker")[1].split("-")[0]
-        Date, Time = v.split("_")
+        base = os.path.basename(v)
+        workerID = base.split("worker")[1].split("-")[0]
+        Date, Time = base.split("_")
         Date = Date.split("worker" + workerID + "-")[1]
         Time = Time.replace(".mjpeg", "").replace("-", ":")
         try:
