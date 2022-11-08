@@ -14,6 +14,8 @@ import numpy as np
 from scipy import spatial
 import params
 import baseFunctions
+import warnings
+warnings.filterwarnings("ignore", category=RuntimeWarning)
 
 #Called functions
 def restructure_tracking_data(rawOneLR):
@@ -147,11 +149,10 @@ def totalIntFrames(oneLR):
 
 def main(argv):
     """Main entry point of program. For takes in the path to a folder and a list of functions to run. Results will be written to Analysis.csv in the current directory."""
-    argv = [0, '/media/apis/Backup Plus/knockOut/', 'trackedFrames', 'distSC', 'meanAct', 'meanSpeed', 'meanIBD', 'totalInt', 'totalIntFrames']
     vids=[]
     for dir, subdir, files in os.walk(argv[1]):
         for f in files:
-            if "mjpeg" in f:
+            if "mjpeg" in f and os.path.exists(os.path.join(dir,f).replace(".mjpeg", ".csv")):
                 vids.append(os.path.join(dir,f))
 
     output = pd.DataFrame()
@@ -165,8 +166,8 @@ def main(argv):
             trackingResults = pd.read_csv(v.replace(".mjpeg", ".csv"))
         
         except Exception as e:
-            print("Error: cannot read " + v.replace(".mjpeg", ".csv"))
             print(e)
+            print("Error: cannot read " + v.replace(".mjpeg", ".csv"))
             existingData = [workerID, Date, Time]
             addOn = ["" for i in range(len(argv[2:-1])+2)]
             row = existingData + addOn
@@ -198,7 +199,7 @@ def main(argv):
                     print(test + " cannot be run on " + v.replace(".mjpeg", ".csv"))
                     analysis[test] = None
                     print(e)
-                    continue
+                    break
             fullAnalysis = pd.concat([fullAnalysis, analysis], axis = 0)
         
         oneVid =  pd.DataFrame(index = fullAnalysis.index)    
