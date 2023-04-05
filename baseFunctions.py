@@ -158,9 +158,7 @@ def main(argv):
     output = pd.DataFrame()
     for v in vids:
         base = os.path.basename(v)
-        workerID = base.split("worker")[1].split("-")[0]
-        Date, Time = base.split("_")
-        Date = Date.split("worker" + workerID + "-")[1]
+        workerID, Date, Time = base.split("_")
         Time = Time.replace(".mjpeg", "").replace("-", ":")
         try:
             trackingResults = pd.read_csv(v.replace(".mjpeg", ".csv"))
