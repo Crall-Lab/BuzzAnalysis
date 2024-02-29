@@ -152,18 +152,18 @@ def main(argv):
     output = pd.DataFrame()
     for dir, subdir, files in os.walk(argv[1]):
         for f in files:
-            if "mjpeg" in f and os.path.exists(os.path.join(dir,f).replace(".mjpeg", ".csv")):
+            if "mjpeg" in f and os.path.exists(os.path.join(dir,f).replace(".mjpeg", "_updated.csv")):
                 v = os.path.join(dir,f)
                 base = os.path.basename(v)
                 print('Analyzing: ' + base)
                 workerID, Date, Time = base.split("_")
                 Time = Time.replace(".mjpeg", "").replace("-", ":")
                 try:
-                    trackingResults = pd.read_csv(v.replace(".mjpeg", ".csv"))
+                    trackingResults = pd.read_csv(v.replace(".mjpeg", "_updated.csv"))
                 
                 except Exception as e:
                     print(e)
-                    print("Error: cannot read " + v.replace(".mjpeg", ".csv"))
+                    print("Error: cannot read " + v.replace(".mjpeg", "_updated.csv"))
                     existingData = [workerID, Date, Time]
                     addOn = ["" for i in range(len(argv[2:-1])+2)]
                     row = existingData + addOn
