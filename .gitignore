@@ -2,3 +2,6 @@ analysisJames.py
 __pycache__
 Analysis.csv
 .DS_Store
+*.csv
+testCore
+testNest

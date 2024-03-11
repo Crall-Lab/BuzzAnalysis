@@ -25,23 +25,39 @@ def restructure_tracking_data(rawOneLR):
     xs = rawOneLR.pivot(index="frame", columns='ID', values = ['centroidX', 'centroidY'])
     return xs.interpolate(method='linear', limit=2, axis='index', limit_direction='both')
 
-
 def parse_opt():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--source', '-s', type=str, default='.', help='Directory containing data. Defaults to current working directory.')
-    parser.add_argument('--extension', '-e', type=str, default='_updated.csv', help='String at end of all data files from tracking. Defaults to "_updated.csv"')
-    parser.add_argument('--brood', '-b', action='store_true', help='Analyse brood data.')
+    parser.add_argument('--source', '-s', type=str, default='testCore', help='Directory containing data. Defaults to current working directory.')
+    parser.add_argument('--extension', '-e', type=str, default='testNest', help='String at end of all data files from tracking. Defaults to "_updated.csv"')
+    parser.add_argument('--brood', '-b', type=str, default=None, help='Provide path to brood data to run brood functions.')
+    parser.add_argument('--broodExtension', '-x', type=str, default='_nest_image.csv', help='Provide path to brood data to run brood functions.')
     parser.add_argument('--whole', '-w', action='store_true', help='Do not split frame into two when analyzing.')
     return parser.parse_args()
+
+def processBrood(base, oneLR, name, ext, broodSource):
+    full = pd.read_csv(os.path.join(broodSource, '_'.join(base.split('_')[0:2]) + ext))
+    brood = full[full['label'] != 'Arena perimeter (polygon)']
+
+    for i in set(brood['object index']):
+        shape = brood[brood['object index'] == i].reindex()
+        if shape['shape'][0] == 'circle':
+            broodLR = oneLR
+        elif shape['shape'][0] == 'polygon':
+            broodLR = oneLR
+        else:
+            continue
+
+
+    return broodLR
 
 def main():
     """Main entry point of program. For takes in the path to a folder and a list of functions to run. Results will be written to Analysis.csv in the current directory."""
     opt = parse_opt()
     output = pd.DataFrame()
     funcs = [f for f in getmembers(baseFunctions) if isfunction(f[1]) and f[1].__module__ == 'baseFunctions']
-    if vars(opt)['brood'] == True:
+    if vars(opt)['brood']:
         funcs = funcs + [f for f in getmembers(broodFunctions) if isfunction(f[1]) and f[1].__module__ == 'broodFunctions']
-    
+
     for dir, subdir, files in os.walk(vars(opt)['source']):
         for f in files:
             if "mjpeg" in f and os.path.exists(os.path.join(dir,f).replace(".mjpeg", vars(opt)['extension'])):
@@ -79,7 +95,9 @@ def main():
                     analysis = pd.DataFrame(index = rawOneLR.ID.unique())
                     analysis['LR'] = name
                     analysis['ID'] = analysis.index
-                    oneLR = restructure_tracking_data(rawOneLR)
+                    oneLR = restructure_tracking_data(rawOneLR) #one video of one colony
+                    if vars(opt)['brood']:
+                        oneLR = processBrood(base, oneLR)
                     for test in funcs:
                         try:
                             analysis[test[0]] = None

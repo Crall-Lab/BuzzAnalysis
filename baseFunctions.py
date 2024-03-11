@@ -33,9 +33,8 @@ def meanAct(oneLR):
 def meanSpeed(oneLR):
     """Gives mean moving speed"""
     act, speed = movement_metrics(oneLR)
-    moving_speed =speed
-    moving_speed[act != 1] = np.nan #For moving speed matrix, replace all frames where bees are not detected as moving with nans
-    return np.nanmean(moving_speed, axis=0)
+    speed[act != 1] = np.nan #For moving speed matrix, replace all frames where bees are not detected as moving with nans
+    return np.nanmean(speed, axis=0)
 
 def meanIBD(oneLR):
     """Calculates mean distance to other bees in cm."""
@@ -93,3 +92,13 @@ def totalIntFrames(oneLR):
     countable_frames[self_ind] = 0
 
     return np.nansum(countable_frames, axis=0)
+
+def meanX(oneLR):
+    return oneLR.centroidX.mean()
+
+def meanY(oneLR):
+    return oneLR.centroidY.mean()
+
+def varSpeed(oneLR):
+    act, speed = movement_metrics(oneLR)
+    return speed.var()
