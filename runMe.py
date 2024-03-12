@@ -17,6 +17,7 @@ import baseFunctions
 import broodFunctions
 import warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning)
+import shapely
 
 def restructure_tracking_data(rawOneLR):
     """Take centroid data from aruco-tracking structured output, rearrange and interpolate missing data"""
@@ -37,16 +38,38 @@ def parse_opt():
 def processBrood(base, oneLR, name, ext, broodSource):
     full = pd.read_csv(os.path.join(broodSource, '_'.join(base.split('_')[0:2]) + ext))
     brood = full[full['label'] != 'Arena perimeter (polygon)']
+    
+    #split
+    if name == 'Left':
+        brood = brood[brood['x'] < np.nanmean(brood['x'].to_numpy())]
+    elif name == "Right":
+        brood = brood[brood['x'] > np.nanmean(brood['x'].to_numpy())]
 
+    #centroid
+    eggs = brood[brood['radius'].isna()]
+    circle = brood.dropna(axis =0)
+    for i in set(eggs['object index']):
+        egg = eggs[eggs['object index'] == i].reset_index()
+        x = shapely.Polygon(egg[['x', 'y']]).centroid.x
+        y = shapely.Polygon(egg[['x', 'y']]).centroid.y
+        eggRow = pd.Series([i, egg.label[0],'polygon',x,y,np.nan])
+        eggRow.index = circle.columns
+        circle = pd.concat([circle.T,eggRow],axis=1).T
+
+    circle = circle.reset_index()
+
+    #distance to closet point
+    
+
+    #get distances and add to oneLR
     for i in set(brood['object index']):
-        shape = brood[brood['object index'] == i].reindex()
+        shape = brood[brood['object index'] == i].reset_index()
         if shape['shape'][0] == 'circle':
             broodLR = oneLR
         elif shape['shape'][0] == 'polygon':
             broodLR = oneLR
         else:
             continue
-
 
     return broodLR
 
@@ -96,6 +119,7 @@ def main():
                     analysis['LR'] = name
                     analysis['ID'] = analysis.index
                     oneLR = restructure_tracking_data(rawOneLR) #one video of one colony
+                    return oneLR, base, name
                     if vars(opt)['brood']:
                         oneLR = processBrood(base, oneLR)
                     for test in funcs:
