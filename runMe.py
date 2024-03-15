@@ -57,6 +57,26 @@ def processBrood(base, oneLR, name, ext, broodSource):
         circle = pd.concat([circle.T,eggRow],axis=1).T
 
     circle = circle.reset_index()
+    oneM = np.moveaxis(oneLR.values.reshape(71, 2, 3), [0, 1], [1, 0])
+    oneM = np.expand_dims(oneM, axis=3)
+    oneMx = oneM[0,:,:,:]
+    oneMy = oneM[1,:,:,:]
+    circleMx = np.array(circle[['x']])
+    circleMx =np.reshape(circleMx, circleMx.shape + (1,1))
+    circleMx = np.moveaxis(circleMx, [0,1], [3, 0])
+    circleMy = np.array(circle[['y']])
+    circleMy =np.reshape(circleMy, circleMy.shape + (1,1))
+    circleMy = np.moveaxis(circleMy, [0,1], [3, 0])
+
+    distances = ((oneMx-circleMx)**2 + (oneMy-circleMy)**2)**0.5
+    distances = np.squeeze(np.moveaxis(distances, [0,1,2,3], [3,0,1,2]))
+
+    distDF = pd.DataFrame()
+    for id in range(distances.shape[1]):
+        newdist = pd.DataFrame(distances[:,id,:])
+        newdist.index = oneLR.index
+        newdist.columns = pd.MultiIndex.from_tuples([(circle['label'][j], oneLR.columns[id][1]) for j in range(len(circle['label']))], names = ['objdistC', 'ID'])
+        distDF = pd.concat([distDF, newdist], axis = 1)
 
     #distance to closet point
     
