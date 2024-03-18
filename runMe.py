@@ -27,6 +27,46 @@ def restructure_tracking_data(rawOneLR):
     xs = rawOneLR.pivot(index="frame", columns='ID', values = ['centroidX', 'centroidY'])
     return xs.interpolate(method='linear', limit=2, axis='index', limit_direction='both')
 
+def minDistance(A, B, P) : 
+    # vector AB 
+    AB = [B[0] - A[0], B[1] - A[1]]
+ 
+    # vector BP
+    BP = [P[0] - B[0], P[1] - B[1]]
+ 
+    # vector AP 
+    AP = [P[0] - A[0], P[1] - A[1]]
+ 
+    # Calculating the dot product 
+    AB_BP = AB[0] * BP[0] + AB[1] * BP[1] 
+    AB_AP = AB[0] * AP[0] + AB[1] * AP[1]
+ 
+    # Minimum distance from 
+    # point E to the line segment 
+    # Case 1 
+    if (AB_BP > 0) :
+ 
+        # Finding the magnitude 
+        y = P[1] - B[1]; 
+        x = P[0] - B[0]; 
+        return (x * x + y * y)**0.5
+ 
+    # Case 2 
+    elif (AB_AP < 0):
+        y = P[1] - A[1]
+        x = P[0] - A[0] 
+        return (x * x + y * y)*0.5
+ 
+    # Case 3 
+    else:
+        # Finding the perpendicular distance 
+        x1 = AB[0]; 
+        y1 = AB[1]; 
+        x2 = AP[0]; 
+        y2 = AP[1]; 
+        mod = (x1 * x1 + y1 * y1)**0.5
+        return abs(x1 * y2 - y1 * x2) / mod
+
 def parse_opt():
     parser = argparse.ArgumentParser()
     parser.add_argument('--source', '-s', type=str, default='.', help='Directory containing data. Defaults to current working directory.')
@@ -47,56 +87,101 @@ def processBrood(base, oneLR, name, ext, broodSource):
     elif name == "Right":
         brood = brood[brood['x'] > np.nanmean(brood['x'].to_numpy())]
 
-    #not eggs
-    noteggs = brood[brood['radius'].isna()]
-    circle = brood.dropna(axis =0)
-    for i in set(noteggs['object index']):
-        notegg = noteggs[noteggs['object index'] == i].reset_index()
-        x = shapely.Polygon(notegg[['x', 'y']]).centroid.x
-        y = shapely.Polygon(notegg[['x', 'y']]).centroid.y
-        eggRow = pd.Series([i, notegg.label[0],'polygon',x,y,np.nan])
-        eggRow.index = circle.columns
-        circle = pd.concat([circle.T,eggRow],axis=1).T
+    #centroid: all
+    eggs = brood[brood['radius'].isna()]
+    allbrood = brood.dropna(axis =0)
+    for i in set(eggs['object index']):
+        egg = eggs[eggs['object index'] == i].reset_index()
+        x = shapely.Polygon(egg[['x', 'y']]).centroid.x
+        y = shapely.Polygon(egg[['x', 'y']]).centroid.y
+        eggRow = pd.Series([i, egg.label[0],'polygon',x,y,np.nan])
+        eggRow.index = allbrood.columns
+        allbrood = pd.concat([allbrood.T,eggRow],axis=1).T
 
-    circle = circle.reset_index()
+    allbrood = allbrood.reset_index()
     oneM = np.moveaxis(oneLR.values.reshape(71, 2, 3), [0, 1], [1, 0])
     oneM = np.expand_dims(oneM, axis=3)
     oneMx = oneM[0,:,:,:]
     oneMy = oneM[1,:,:,:]
-    circleMx = np.array(circle[['x']])
-    circleMx =np.reshape(circleMx, circleMx.shape + (1,1))
-    circleMx = np.moveaxis(circleMx, [0,1], [3, 0])
-    circleMy = np.array(circle[['y']])
-    circleMy =np.reshape(circleMy, circleMy.shape + (1,1))
-    circleMy = np.moveaxis(circleMy, [0,1], [3, 0])
+    allbroodx = np.array(allbrood[['x']])
+    allbroodx =np.reshape(allbroodx, allbroodx.shape + (1,1))
+    allbroodx = np.moveaxis(allbroodx, [0,1], [3, 0])
+    allbroody = np.array(allbrood[['y']])
+    allbroody =np.reshape(allbroody, allbroody.shape + (1,1))
+    allbroody = np.moveaxis(allbroody, [0,1], [3, 0])
 
-    distances = ((oneMx-circleMx)**2 + (oneMy-circleMy)**2)**0.5
+    distances = ((oneMx-allbroodx)**2 + (oneMy-allbroody)**2)**0.5
     distances = np.squeeze(np.moveaxis(distances, [0,1,2,3], [3,0,1,2]))
 
     distDF = pd.DataFrame()
     for id in range(distances.shape[1]):
         newdist = pd.DataFrame(distances[:,id,:])
         newdist.index = oneLR.index
-        newdist.columns = pd.MultiIndex.from_tuples([('distC_'+circle['label'][j], oneLR.columns[id][1]) for j in range(len(circle['label']))], names = ['metric', 'ID'])
+        newdist.columns = pd.MultiIndex.from_tuples([('distC_'+allbrood['label'][j]+'_'+allbrood['object index'][j], oneLR.columns[id][1]) for j in range(len(allbrood['label']))], names = [None, 'ID'])
         distDF = pd.concat([distDF, newdist], axis = 1)
 
-    dist2DF = copy.deepcopy(distDF)
+    #distance to closet point: circle
+    circle = brood.dropna(axis =0)
+
+    circle = circle.reset_index()
+    oneM = np.moveaxis(oneLR.values.reshape(71, 2, 3), [0, 1], [1, 0])
+    oneM = np.expand_dims(oneM, axis=3)
+    oneMx = oneM[0,:,:,:]
+    oneMy = oneM[1,:,:,:]
+    circleX = np.array(circle[['x']])
+    circleX =np.reshape(circleX, circleX.shape + (1,1))
+    circleX = np.moveaxis(circleX, [0,1], [3, 0])
+    circleY = np.array(circle[['y']])
+    circleY =np.reshape(circleY, circleY.shape + (1,1))
+    circleY = np.moveaxis(circleY, [0,1], [3, 0])
+    circleR = np.array(circle[['radius']])
+    circleR =np.reshape(circleR, circleR.shape + (1,1))
+    circleR = np.moveaxis(circleR, [0,1], [3, 0])
+
+    distances = ((oneMx-circleX)**2 + (oneMy-circleY)**2)**0.5 - circleR
+    distances = np.squeeze(np.moveaxis(distances, [0,1,2,3], [3,0,1,2]))
+
+    distDF2 = pd.DataFrame()
+    for id in range(distances.shape[1]):
+        newdist = pd.DataFrame(distances[:,id,:])
+        newdist.index = oneLR.index
+        newdist.columns = pd.MultiIndex.from_tuples([('distM_'+circle['label'][j]+'_'+str(circle['object index'][j]), oneLR.columns[id][1]) for j in range(len(circle['label']))], names = [None, 'ID'])
+        distDF2 = pd.concat([distDF2, newdist], axis = 1)
     
-
-    #eggs
+    #distance to closet point: polygon
+    eggs = eggs.reset_index()
+    columns = list()
+    for i in range(len(eggs.drop_duplicates('object index'))):
+        for j in range(distances.shape[1]):
+            columns.append(('distM_'+eggs['label'][i]+'_'+str(eggs['object index'][i]), oneLR.columns[j][1]))
     
+    distDF3 = pd.DataFrame(index = oneLR.index, columns =  pd.MultiIndex.from_tuples(columns))
 
-    #get distances and add to oneLR
-    for i in set(brood['object index']):
-        shape = brood[brood['object index'] == i].reset_index()
-        if shape['shape'][0] == 'circle':
-            broodLR = oneLR
-        elif shape['shape'][0] == 'polygon':
-            broodLR = oneLR
-        else:
-            continue
+    for i in range(distDF3.shape[0]):
+        for j in range(distDF3.shape[1]):
+            obj, bee = distDF3.columns[j]
+            objID = obj.split('_')[-1]
+            points = eggs[eggs['object index'] == int(objID)]
+            
+            blob = shapely.Polygon(points[['x','y']])
+            pt = shapely.Point((oneLR.loc[oneLR.index[i], ('centroidX', bee)], oneLR.loc[oneLR.index[i], ('centroidY', bee)]))
 
-    return broodLR
+            if blob.contains(pt):
+                distDF3.iloc[i,j] = 0
+            else:
+                ptDist = list()
+                for p1 in range(len(points.index)):
+                    for p2 in range(len(points.index)):
+                        if p1 != p2:
+                            A = [points.loc[p1, 'x'], points.loc[p1, 'y']]
+                            B = [points.loc[p2, 'x'], points.loc[p2, 'y']]
+                            P = [oneLR.loc[oneLR.index[i], ('centroidX', bee)], oneLR.loc[oneLR.index[i], ('centroidY', bee)]]
+                            ptDist.append(minDistance(A, B, P))
+
+                distDF3.iloc[i,j] = min(ptDist)
+
+    
+    return pd.concat([oneLR, distDF, distDF2, distDF3], axis=1)
 
 def main():
     """Main entry point of program. For takes in the path to a folder and a list of functions to run. Results will be written to Analysis.csv in the current directory."""
