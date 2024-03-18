@@ -18,6 +18,7 @@ import broodFunctions
 import warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 import shapely
+import copy
 
 def restructure_tracking_data(rawOneLR):
     """Take centroid data from aruco-tracking structured output, rearrange and interpolate missing data"""
@@ -46,14 +47,14 @@ def processBrood(base, oneLR, name, ext, broodSource):
     elif name == "Right":
         brood = brood[brood['x'] > np.nanmean(brood['x'].to_numpy())]
 
-    #centroid
-    eggs = brood[brood['radius'].isna()]
+    #not eggs
+    noteggs = brood[brood['radius'].isna()]
     circle = brood.dropna(axis =0)
-    for i in set(eggs['object index']):
-        egg = eggs[eggs['object index'] == i].reset_index()
-        x = shapely.Polygon(egg[['x', 'y']]).centroid.x
-        y = shapely.Polygon(egg[['x', 'y']]).centroid.y
-        eggRow = pd.Series([i, egg.label[0],'polygon',x,y,np.nan])
+    for i in set(noteggs['object index']):
+        notegg = noteggs[noteggs['object index'] == i].reset_index()
+        x = shapely.Polygon(notegg[['x', 'y']]).centroid.x
+        y = shapely.Polygon(notegg[['x', 'y']]).centroid.y
+        eggRow = pd.Series([i, notegg.label[0],'polygon',x,y,np.nan])
         eggRow.index = circle.columns
         circle = pd.concat([circle.T,eggRow],axis=1).T
 
@@ -76,10 +77,13 @@ def processBrood(base, oneLR, name, ext, broodSource):
     for id in range(distances.shape[1]):
         newdist = pd.DataFrame(distances[:,id,:])
         newdist.index = oneLR.index
-        newdist.columns = pd.MultiIndex.from_tuples([(circle['label'][j], oneLR.columns[id][1]) for j in range(len(circle['label']))], names = ['objdistC', 'ID'])
+        newdist.columns = pd.MultiIndex.from_tuples([('distC_'+circle['label'][j], oneLR.columns[id][1]) for j in range(len(circle['label']))], names = ['metric', 'ID'])
         distDF = pd.concat([distDF, newdist], axis = 1)
 
-    #distance to closet point
+    dist2DF = copy.deepcopy(distDF)
+    
+
+    #eggs
     
 
     #get distances and add to oneLR
@@ -104,7 +108,7 @@ def main():
 
     for dir, subdir, files in os.walk(vars(opt)['source']):
         for f in files:
-            if vars(opt)['bomubus']:
+            if vars(opt)['bombus']:
                 if "mjpeg" in f and os.path.exists(os.path.join(dir,f).replace(".mjpeg", vars(opt)['extension'])):
                     v = os.path.join(dir,f)
                     print('Analyzing: ' + f)
@@ -131,7 +135,7 @@ def main():
                 if vars(opt)['extension'] in f:
                     v = os.path.join(dir,f)
                     print('Analyzing: ' + f)
-                    workerID, Date, Time = f.split("_")
+                    workerID, Date, Time = f.split("_")[0:3]
                     Time = Time.replace(vars(opt)['extension'], "").replace("-", ":")
                     try:
                         trackingResults = pd.read_csv(v)
