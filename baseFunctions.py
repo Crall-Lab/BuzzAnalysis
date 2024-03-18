@@ -94,11 +94,14 @@ def totalIntFrames(oneLR):
     return np.nansum(countable_frames, axis=0)
 
 def meanX(oneLR):
+    """Mean x-coordinate of bee."""
     return oneLR.centroidX.mean()
 
 def meanY(oneLR):
+    """Mean y-coordinate of bee."""
     return oneLR.centroidY.mean()
 
 def varSpeed(oneLR):
+    """Varience of speed of bee."""
     act, speed = movement_metrics(oneLR)
     return speed.var()

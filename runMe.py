@@ -28,11 +28,12 @@ def restructure_tracking_data(rawOneLR):
 
 def parse_opt():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--source', '-s', type=str, default='testCore', help='Directory containing data. Defaults to current working directory.')
-    parser.add_argument('--extension', '-e', type=str, default='testNest', help='String at end of all data files from tracking. Defaults to "_updated.csv"')
+    parser.add_argument('--source', '-s', type=str, default='.', help='Directory containing data. Defaults to current working directory.')
+    parser.add_argument('--extension', '-e', type=str, default='_updated.csv', help='String at end of all data files from tracking. Defaults to "_updated.csv"')
     parser.add_argument('--brood', '-b', type=str, default=None, help='Provide path to brood data to run brood functions.')
-    parser.add_argument('--broodExtension', '-x', type=str, default='_nest_image.csv', help='Provide path to brood data to run brood functions.')
+    parser.add_argument('--broodExtension', '-x', type=str, default='_nest_image.csv', help='String at end of all data files (must be CSVs) containing brood data. Defaults to "_nest_image.csv"')
     parser.add_argument('--whole', '-w', action='store_true', help='Do not split frame into two when analyzing.')
+    parser.add_argument('--bombus', '-z', action='store_true', help='Data is from rig, run alternative search for data files.')
     return parser.parse_args()
 
 def processBrood(base, oneLR, name, ext, broodSource):
@@ -103,26 +104,51 @@ def main():
 
     for dir, subdir, files in os.walk(vars(opt)['source']):
         for f in files:
-            if "mjpeg" in f and os.path.exists(os.path.join(dir,f).replace(".mjpeg", vars(opt)['extension'])):
-                v = os.path.join(dir,f)
-                base = os.path.basename(v)
-                print('Analyzing: ' + base)
-                workerID, Date, Time = base.split("_")
-                Time = Time.replace(".mjpeg", "").replace("-", ":")
-                try:
-                    trackingResults = pd.read_csv(v.replace(".mjpeg", vars(opt)['extension']))
-                
-                except Exception as e:
-                    print(e)
-                    print("Error: cannot read " + v.replace(".mjpeg", vars(opt)['extension']))
-                    existingData = [workerID, Date, Time]
-                    addOn = ["" for i in range(len(funcs)+2)]
-                    row = existingData + addOn
-                    analysis = pd.DataFrame([row], columns = ['pi_ID', 'Date', 'Time', 'LR', 'ID']+test)
-                    analysis.worker = workerID
-                    analysis.Date = Date
-                    analysis.Time = Time
-                    output = pd.concat([output, analysis], ignore_index=True, axis = 0)
+            if vars(opt)['bomubus']:
+                if "mjpeg" in f and os.path.exists(os.path.join(dir,f).replace(".mjpeg", vars(opt)['extension'])):
+                    v = os.path.join(dir,f)
+                    print('Analyzing: ' + f)
+                    workerID, Date, Time = f.split("_")
+                    Time = Time.replace(".mjpeg", "").replace("-", ":")
+                    try:
+                        trackingResults = pd.read_csv(v.replace(".mjpeg", vars(opt)['extension']))
+                    
+                    except Exception as e:
+                        print(e)
+                        print("Error: cannot read " + v.replace(".mjpeg", vars(opt)['extension']))
+                        existingData = [workerID, Date, Time]
+                        addOn = ["" for i in range(len(funcs)+2)]
+                        row = existingData + addOn
+                        analysis = pd.DataFrame([row], columns = ['pi_ID', 'Date', 'Time', 'LR', 'ID']+test)
+                        analysis.worker = workerID
+                        analysis.Date = Date
+                        analysis.Time = Time
+                        output = pd.concat([output, analysis], ignore_index=True, axis = 0)
+                        continue
+                else:
+                    continue
+            else:
+                if vars(opt)['extension'] in f:
+                    v = os.path.join(dir,f)
+                    print('Analyzing: ' + f)
+                    workerID, Date, Time = f.split("_")
+                    Time = Time.replace(vars(opt)['extension'], "").replace("-", ":")
+                    try:
+                        trackingResults = pd.read_csv(v)
+                    
+                    except Exception as e:
+                        print(e)
+                        print("Error: cannot read " + v)
+                        existingData = [workerID, Date, Time]
+                        addOn = ["" for i in range(len(funcs)+2)]
+                        row = existingData + addOn
+                        analysis = pd.DataFrame([row], columns = ['pi_ID', 'Date', 'Time', 'LR', 'ID']+test)
+                        analysis.worker = workerID
+                        analysis.Date = Date
+                        analysis.Time = Time
+                        output = pd.concat([output, analysis], ignore_index=True, axis = 0)
+                        continue
+                else:
                     continue
                 
                 if vars(opt)['whole']:
@@ -139,9 +165,8 @@ def main():
                     analysis['LR'] = name
                     analysis['ID'] = analysis.index
                     oneLR = restructure_tracking_data(rawOneLR) #one video of one colony
-                    return oneLR, base, name
                     if vars(opt)['brood']:
-                        oneLR = processBrood(base, oneLR)
+                        oneLR = processBrood(f, oneLR)
                     for test in funcs:
                         try:
                             analysis[test[0]] = None
