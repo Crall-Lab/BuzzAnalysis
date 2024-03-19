@@ -18,7 +18,16 @@ import broodFunctions
 import warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 import shapely
-import copy
+
+def parse_opt():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--source', '-s', type=str, default='.', help='Directory containing data. Defaults to current working directory.')
+    parser.add_argument('--extension', '-e', type=str, default='_updated.csv', help='String at end of all data files from tracking. Defaults to "_updated.csv"')
+    parser.add_argument('--brood', '-b', type=str, default=None, help='Provide path to brood data to run brood functions.')
+    parser.add_argument('--broodExtension', '-x', type=str, default='_nest_image.csv', help='String at end of all data files (must be CSVs) containing brood data. Defaults to "_nest_image.csv"')
+    parser.add_argument('--whole', '-w', action='store_true', help='Do not split frame into two when analyzing.')
+    parser.add_argument('--bombus', '-z', action='store_true', help='Data is from rig, run alternative search for data files.')
+    return parser.parse_args()
 
 def restructure_tracking_data(rawOneLR):
     """Take centroid data from aruco-tracking structured output, rearrange and interpolate missing data"""
@@ -66,17 +75,7 @@ def minDistance(A, B, P) :
         y2 = AP[1]; 
         mod = (x1 * x1 + y1 * y1)**0.5
         return abs(x1 * y2 - y1 * x2) / mod
-
-def parse_opt():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--source', '-s', type=str, default='.', help='Directory containing data. Defaults to current working directory.')
-    parser.add_argument('--extension', '-e', type=str, default='_updated.csv', help='String at end of all data files from tracking. Defaults to "_updated.csv"')
-    parser.add_argument('--brood', '-b', type=str, default=None, help='Provide path to brood data to run brood functions.')
-    parser.add_argument('--broodExtension', '-x', type=str, default='_nest_image.csv', help='String at end of all data files (must be CSVs) containing brood data. Defaults to "_nest_image.csv"')
-    parser.add_argument('--whole', '-w', action='store_true', help='Do not split frame into two when analyzing.')
-    parser.add_argument('--bombus', '-z', action='store_true', help='Data is from rig, run alternative search for data files.')
-    return parser.parse_args()
-
+    
 def processBrood(base, oneLR, name, ext, broodSource):
     full = pd.read_csv(os.path.join(broodSource, '_'.join(base.split('_')[0:2]) + ext))
     brood = full[full['label'] != 'Arena perimeter (polygon)']
@@ -117,7 +116,7 @@ def processBrood(base, oneLR, name, ext, broodSource):
     for id in range(distances.shape[1]):
         newdist = pd.DataFrame(distances[:,id,:])
         newdist.index = oneLR.index
-        newdist.columns = pd.MultiIndex.from_tuples([('distC_'+allbrood['label'][j]+'_'+allbrood['object index'][j], oneLR.columns[id][1]) for j in range(len(allbrood['label']))], names = [None, 'ID'])
+        newdist.columns = pd.MultiIndex.from_tuples([('distC_'+allbrood['label'][j]+'_'+str(allbrood['object index'][j]), oneLR.columns[id][1]) for j in range(len(allbrood['label']))], names = [None, 'ID'])
         distDF = pd.concat([distDF, newdist], axis = 1)
 
     #distance to closet point: circle
@@ -179,8 +178,6 @@ def processBrood(base, oneLR, name, ext, broodSource):
                             ptDist.append(minDistance(A, B, P))
 
                 distDF3.iloc[i,j] = min(ptDist)
-
-    
     return pd.concat([oneLR, distDF, distDF2, distDF3], axis=1)
 
 def main():
