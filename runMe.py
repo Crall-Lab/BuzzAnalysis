@@ -17,6 +17,7 @@ import baseFunctions
 import broodFunctions
 import warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning)
+warnings.filterwarnings("ignore", category=FutureWarning)
 import shapely
 
 def parse_opt():
