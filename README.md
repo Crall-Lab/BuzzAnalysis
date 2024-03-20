@@ -66,8 +66,23 @@ The results of the analysis can then be found in *Analysis.csv* within the BuzzA
 - meanX: Gives mean x-coordinate of bee.
 - meanY: Gives mean y-coordiante of bee.
 - varSpeed: Gives varience of speed of bee.
+- medianMinDistToOthers: Gives median of minimum distance in each frame to other bees.
 
 ### Brood Functions
+- meanEggDistM: Gives mean distance to eggs across frames.
+- meanLarvaeDistM: Gives mean distance to larvae across frames.
+- PropLarvaeTime: Gives proportion of time spent on larvae.
+- meanPupaeDistM: Gives mean distance to pupae across frames.
+- PropPupaeTime: Gives proportion of time spent on pupae.
+- meanWaxPotDistM: Gives mean distance to wax pots across frames.
+- medianClosesWaxPotDistM: Gives median of minimum distance in each frame to closest wax pot.
+- PropWaxPotTime: Gives proportion of time spent on wax pots.
+- meanNectarDistM: Gives mean distance to nectar source across frames.
+- meanPollenDistM: Gives mean distance to pollen across frames.
+- meanBroodDistM: Gives mean distance to brood across frames.
+- medianClosestBroodDistM:Gives median of minimum distance in each frame to closest brood.
+- PropBroodTime: Gives proportion of time spent on brood.
+- PropInactiveTime: Gives proportion of time spent off nest and food, and not moving.
 
 <br><br>
 

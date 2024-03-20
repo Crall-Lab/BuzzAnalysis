@@ -9,7 +9,7 @@ __version__ = '0.0.1'
 #imports
 import numpy as np
 from scipy import spatial
-import params
+from params import *
 
 def nest_social_center(oneLR):
     """Generic function to calculate the nest social center from standard pandas array with centroid coordinates."""
@@ -21,7 +21,7 @@ def nest_social_center(oneLR):
 def movement_metrics(oneLR):
     """Returns two pd.Series(), act is whether a bee is moving in a frame, speed is the speed of a bee in a frame."""
     speed = np.sqrt(oneLR['centroidX'].diff(axis=0)**2 + oneLR['centroidY'].diff(axis=0)**2)
-    act = speed > params.digital_noise_speed_cutoff
+    act = speed > digital_noise_speed_cutoff
     act = 1*act
     act[np.isnan(speed)] = np.nan
 

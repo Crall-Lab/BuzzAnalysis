@@ -9,7 +9,7 @@ __version__ = '0.0.1'
 #imports
 import numpy as np
 from aux import *
-import params
+from params import *
 
 #Tests (all tests should be vectorized)
 def trackedFrames(oneLR):
@@ -46,7 +46,7 @@ def meanIBD(oneLR):
     self_ind = ib_dist_mean == 0
     ib_dist_mean[self_ind] = np.nan
     ibd_mean = np.nanmean(ib_dist_mean, axis=1)
-    return ibd_mean/params.pixels_per_cm
+    return ibd_mean/pixels_per_cm
 
 def totalInt(oneLR):
     """Calculates total number of interactions between bees in a video."""
@@ -57,7 +57,7 @@ def totalInt(oneLR):
     for fn in range(len(ib_dists)):
         frame_dists= ib_dists[fn]
         frame_dists[frame_dists==0] = np.Inf
-        int_mat = frame_dists < params.interaction_distance_cutoff
+        int_mat = frame_dists < interaction_distance_cutoff
         int_mat = 1*int_mat
 
         if fn == 0:
@@ -80,7 +80,7 @@ def totalIntFrames(oneLR):
     for fn in range(len(ib_dists)):
         frame_dists= ib_dists[fn]
         frame_dists[frame_dists==0] = np.Inf
-        int_mat = frame_dists < params.interaction_distance_cutoff
+        int_mat = frame_dists < interaction_distance_cutoff
         int_mat = 1*int_mat
 
         if fn == 0:
@@ -105,3 +105,14 @@ def varSpeed(oneLR):
     """Varience of speed of bee."""
     act, speed = movement_metrics(oneLR)
     return speed.var()
+
+def medianMinDistToOthers(oneLR):
+    """Median minimum distance to other bees in cm."""
+    if len(oneLR.columns) == 2:
+        print("No interactions possible, only one tag found in video.")
+        return None
+    ibm = np.array(interbee_distance_matrix(oneLR))
+    beeN = np.arange(ibm.shape[1])
+    ibm[:, beeN, beeN] = np.nan
+    minDist = np.nanmin(ibm, axis=1)
+    return np.nanmedian(minDist,axis=0)/pixels_per_cm
