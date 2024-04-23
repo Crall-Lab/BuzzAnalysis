@@ -83,6 +83,8 @@ def PropBroodTime(broodLR):
     brood.columns = [('distM' + str(colname[1])) for colname in brood.columns]
     closest = brood.T.groupby(brood.T.index).min().T
     out = closest < onDist
+    print('brood index: ')
+    print(out.index)
     out.index = [int(i.split('M')[1]) for i in out.index]
     return out.mean()
 
@@ -92,6 +94,8 @@ def PropPupaeTime(broodLR):
     pupae.columns = [('distM' + str(colname[1])) for colname in pupae.columns]
     closest = pupae.T.groupby(pupae.T.index).min().T
     out = closest < onDist
+    print('pupae index: ')
+    print(out.index)
     out.index = [int(i.split('M')[1]) for i in out.index]
     return out.mean()
 

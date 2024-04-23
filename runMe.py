@@ -36,9 +36,9 @@ def restructure_tracking_data(rawOneLR):
 
 def parse_opt():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--source', '-s', type=str, default='.', help='Directory containing data. Defaults to current working directory.')
-    parser.add_argument('--extension', '-e', type=str, default='_updated.csv', help='String at end of all data files from tracking. Defaults to "_updated.csv"')
-    parser.add_argument('--brood', '-b', type=str, default=None, help='Provide path to brood data to run brood functions.')
+    parser.add_argument('--source', '-s', type=str, default='testCSV', help='Directory containing data. Defaults to current working directory.')
+    parser.add_argument('--extension', '-e', type=str, default='.csv', help='String at end of all data files from tracking. Defaults to "_updated.csv"')
+    parser.add_argument('--brood', '-b', type=str, default='testCrop', help='Provide path to brood data to run brood functions.')
     parser.add_argument('--broodExtension', '-x', type=str, default='_nest_image.csv', help='String at end of all data files (must be CSVs) containing brood data. Defaults to "_nest_image.csv"')
     parser.add_argument('--whole', '-w', action='store_true', help='Do not split frame into two when analyzing.')
     parser.add_argument('--bombus', '-z', action='store_true', help='Data is from rig, run alternative search for data files.')
@@ -67,7 +67,7 @@ def processBrood(base, oneLR, name, ext, broodSource):
         circle = pd.concat([circle.T, eggRow], axis=1).T
 
     circle = circle.reset_index()
-    oneM = np.moveaxis(oneLR.values.reshape(71, 2, 3), [0, 1], [1, 0])
+    oneM = np.moveaxis(oneLR.values.reshape(oneLR.shape[0], 2, int(oneLR.shape[1]/2)), [0, 1], [1, 0])
     oneM = np.expand_dims(oneM, axis=3)
     oneMx = oneM[0, :, :, :]
     oneMy = oneM[1, :, :, :]
@@ -80,8 +80,9 @@ def processBrood(base, oneLR, name, ext, broodSource):
 
     distances = ((oneMx - circleMx)**2 + (oneMy - circleMy)**2)**0.5
     distances = np.squeeze(np.moveaxis(distances, [0, 1, 2, 3], [3, 0, 1, 2]))
-
     distDF = pd.DataFrame()
+    if len(distances.shape) == 2:
+        distances = np.expand_dims(distances, 1)
     for id in range(distances.shape[1]):
         newdist = pd.DataFrame(distances[:, id, :])
         newdist.index = oneLR.index
@@ -107,73 +108,77 @@ def processBrood(base, oneLR, name, ext, broodSource):
 
 def main():
     """Main entry point of program. For takes in the path to a folder and a list of functions to run. Results will be written to Analysis.csv in the current directory."""
-    opt = parse_opt()
+    opt = vars(parse_opt())
+    opt['bombus'] = True
     output = pd.DataFrame()
     funcs = [f for f in getmembers(baseFunctions) if isfunction(f[1]) and f[1].__module__ == 'baseFunctions']
-    if vars(opt)['brood']:
+    if opt['brood']:
         funcs = funcs + [f for f in getmembers(broodFunctions) if isfunction(f[1]) and f[1].__module__ == 'broodFunctions']
 
-    for dir, subdir, files in os.walk(vars(opt)['source']):
+    for dir, subdir, files in os.walk(opt['source']):
         for f in files:
+            print(f)
             try:
-                if vars(opt)['bombus']:
-                    if "mjpeg" in f and os.path.exists(os.path.join(dir, f).replace(".mjpeg", vars(opt)['extension'])):
-                        v = os.path.join(dir, f)
-                        print('Analyzing: ' + f)
-                        workerID, Date, Time = f.split("_")
-                        Time = Time.replace(".mjpeg", "").replace("-", ":")
-                        trackingResults = pd.read_csv(v.replace(".mjpeg", vars(opt)['extension']))
-
+                if opt['bombus']:
+                    if 'mjpeg' in f and os.path.exists(os.path.join(dir, f).replace(".mjpeg", opt['extension'])):
+                                v = os.path.join(dir, f)
+                                print('Analyzing: ' + f)
+                                workerID, Date, Time = f.split("_")
+                                Time = Time.replace(".mjpeg", "").replace("-", ":")
+                                trackingResults = pd.read_csv(v.replace(".mjpeg", opt['extension']))
+                    else:
+                        continue
                 else:
-                    if vars(opt)['extension'] in f:
+                    if opt['extension'] in f:
                         v = os.path.join(dir, f)
                         print('Analyzing: ' + f)
                         workerID, Date, Time = f.split("_")[0:3]
-                        Time = Time.replace(vars(opt)['extension'], "").replace("-", ":")
+                        Time = Time.replace(opt['extension'], "").replace("-", ":")
                         trackingResults = pd.read_csv(v)
-
                     else:
                         continue
-
-                    if vars(opt)['whole']:
-                        trackingResults['LR'] = "Whole"
-                    else:
-                        trackingResults['LR'] = (trackingResults['centroidX'] < np.nanmean(trackingResults['centroidX'].to_numpy()))
-                        trackingResults.loc[trackingResults['LR'], 'LR'] = "Left"
-                        trackingResults.loc[trackingResults['LR'] != "Left", 'LR'] = "Right"
-
-                    fullAnalysis = pd.DataFrame()
-                    datasets = trackingResults.groupby('LR')
-                    for name, rawOneLR in datasets:
-                        analysis = pd.DataFrame(index=rawOneLR.ID.unique())
-                        analysis['LR'] = name
-                        analysis['ID'] = analysis.index
-                        oneLR = restructure_tracking_data(rawOneLR)  # one video of one colony
-                        if vars(opt)['brood']:
-                            oneLR = processBrood(f, oneLR)
-                        for test in funcs:
-                            try:
-                                analysis[test[0]] = None
-                                analysis[test[0]] = test[1](oneLR)
-                            except Exception as e:
-                                print(test + " cannot be run on " + v.replace(".mjpeg", vars(opt)['extension']))
-                                analysis[test] = None
-                                print(e)
-                                break
-                        fullAnalysis = pd.concat([fullAnalysis, analysis], axis=0)
-
-                    oneVid = pd.DataFrame(index=fullAnalysis.index)
-                    oneVid['pi_ID'] = workerID
-                    oneVid['bee_ID'] = oneVid.index
-                    oneVid['Date'] = Date
-                    oneVid['Time'] = Time
-                    oneVid = pd.concat([oneVid, fullAnalysis], axis=1)
-
-                    output = pd.concat([output, oneVid], ignore_index=True, axis=0)
-                    print('Done!')
             except Exception as e:
                 print('Error reading file ' + f + ', skipping...')
                 continue
+
+            if opt['whole']:
+                trackingResults['LR'] = "Whole"
+            else:
+                trackingResults['LR'] = (trackingResults['centroidX'] < np.nanmean(trackingResults['centroidX'].to_numpy()))
+                trackingResults.loc[trackingResults['LR'], 'LR'] = "Left"
+                trackingResults.loc[trackingResults['LR'] != "Left", 'LR'] = "Right"
+
+            fullAnalysis = pd.DataFrame()
+            datasets = trackingResults.groupby('LR')
+            for name, rawOneLR in datasets:
+                analysis = pd.DataFrame(index=rawOneLR.ID.unique())
+                analysis['LR'] = name
+                analysis['ID'] = analysis.index
+                oneLR = restructure_tracking_data(rawOneLR)  # one video of one colony
+                if opt['brood']:
+                    oneLR = processBrood(f, oneLR, name, opt['broodExtension'], opt['brood'])
+                    oneLR.to_csv('oneLR.csv')
+                for test in funcs:
+                    #try:
+                        analysis[test[0]] = None
+                        analysis[test[0]] = test[1](oneLR)
+                    #except Exception as e:
+                    #    print(test[0] + " cannot be run on " + v.replace(".mjpeg", opt['extension']))
+                    #    analysis[test] = None
+                    #    print(e)
+                    #    continue
+                fullAnalysis = pd.concat([fullAnalysis, analysis], axis=0)
+
+            oneVid = pd.DataFrame(index=fullAnalysis.index)
+            oneVid['pi_ID'] = workerID
+            oneVid['bee_ID'] = oneVid.index
+            oneVid['Date'] = Date
+            oneVid['Time'] = Time
+            oneVid = pd.concat([oneVid, fullAnalysis], axis=1)
+
+            output = pd.concat([output, oneVid], ignore_index=True, axis=0)
+            print('Done!')
+    
     output.to_csv(path_or_buf="Analysis.csv")
     print("All done!")
     return 0
