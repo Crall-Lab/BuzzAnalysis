@@ -29,7 +29,7 @@ def parse_opt():
     parser = argparse.ArgumentParser()
     parser.add_argument('--source', '-s', type=str, default='testCSV', help='Directory containing data. Defaults to current working directory.')
     parser.add_argument('--extension', '-e', type=str, default='.csv', help='String at end of all data files from tracking. Defaults to "_updated.csv"')
-    parser.add_argument('--brood', '-b', type=str, default='testCrop', help='Provide path to brood data to run brood functions.')
+    parser.add_argument('--brood', '-b', type=str, default=None, help='Provide path to brood data to run brood functions.')
     parser.add_argument('--broodExtension', '-x', type=str, default='_nest_image.csv', help='String at end of all data files (must be CSVs) containing brood data. Defaults to "_nest_image.csv"')
     parser.add_argument('--whole', '-w', action='store_true', help='Do not split frame into two when analyzing.')
     parser.add_argument('--bombus', '-z', action='store_true', help='Data is from rig, run alternative search for data files.')
@@ -82,48 +82,11 @@ def minDistance(A, B, P) :
         mod = (x1 * x1 + y1 * y1)**0.5
         return abs(x1 * y2 - y1 * x2) / mod
 
-def processBrood(base, oneLR, name, ext, broodSource):
-    full = pd.read_csv(os.path.join(broodSource, '_'.join(base.split('_')[0:2]) + ext))
+
+def distanceFromCentroid(oneLR, allbrood):
+    if len(oneLR.columns) == 0 or len(allbrood.index) == 0:
+        return pd.DataFrame()
     
-    #split
-    if name == 'Left':
-        full = full[full['x'] < np.nanmean(oneLR['centroidX'].to_numpy())]
-    elif name == "Right":
-        full = full[full['x'] > np.nanmean(oneLR['centroidY'].to_numpy())]
-
-    #Don't care about areana
-    brood = full[full['label'] != 'Arena perimeter (polygon)']
-
-    #centroid: all
-    eggs = brood[brood['radius'].isna()]
-    allbrood = brood.dropna(axis =0)
-    for i in set(eggs['object index']):
-        try:
-            egg = eggs[eggs['object index'] == i].reset_index()
-            x = shapely.Polygon(np.array(egg[['x', 'y']])).centroid.x
-            y = shapely.Polygon(np.array(egg[['x', 'y']])).centroid.y
-            eggRow = pd.Series([i, egg.label[0],'polygon',x,y,np.nan])
-            eggRow.index = allbrood.columns
-            allbrood = pd.concat([allbrood.T,eggRow],axis=1).T
-        except Exception as e:
-            print(e)
-            errorFile = open('Error.csv', 'a')
-            print(base + ', object ' + str(i) + ': ' + egg['label'][0] + '\n')
-            print(str(e) + '\n')
-            errorFile.close()
-            if brood[brood['object index'] == i].shape[1] > 0:
-                brood[brood['object index'] == i] = np.nan
-                brood = brood.dropna(axis = 0)
-            if eggs[eggs['object index'] == i].shape[1] > 0:
-                eggs[eggs['object index'] == i] = np.nan
-                eggs = eggs.dropna(axis = 0)
-            if allbrood[allbrood['object index'] == i].shape[1] > 0:
-                allbrood[allbrood['object index'] == i] = np.nan
-                allbrood = allbrood.dropna(axis = 0)
-            continue
-
-
-    allbrood = allbrood.reset_index()
     oneM = np.moveaxis(oneLR.values.reshape(oneLR.shape[0], 2, int(oneLR.shape[1]/2)), [0, 1], [1, 0])
     oneM = np.expand_dims(oneM, axis=3)
     oneMx = oneM[0,:,:,:]
@@ -137,8 +100,12 @@ def processBrood(base, oneLR, name, ext, broodSource):
 
     distances = ((oneMx-allbroodx)**2 + (oneMy-allbroody)**2)**0.5
     distances = np.squeeze(np.moveaxis(distances, [0,1,2,3], [3,0,1,2]))
-    if len(distances.shape) == 2:
+
+    
+    if len(oneLR.columns) == 2:
         distances = np.expand_dims(distances, 1)
+    if len(allbrood.index) == 1:
+        distances = np.expand_dims(distances, 2)
 
     distDF = pd.DataFrame()
     for id in range(distances.shape[1]):
@@ -146,11 +113,17 @@ def processBrood(base, oneLR, name, ext, broodSource):
         newdist.index = oneLR.index
         newdist.columns = pd.MultiIndex.from_tuples([('distC_'+allbrood['label'][j]+'_'+str(allbrood['object index'][j]), oneLR.columns[id][1]) for j in range(len(allbrood['label']))], names = [None, 'ID'])
         distDF = pd.concat([distDF, newdist], axis = 1)
+    return distDF
 
+def minimumDistanceCircle(brood, oneLR):
     #distance to closet point: circle
     circle = brood.dropna(axis =0)
-
     circle = circle.reset_index()
+    labels = ['distM_'+circle['label'][j]+'_'+str(circle['object index'][j]) for j in range(len(circle['label']))]
+       
+    if len(oneLR.columns) == 0 or len(labels) == 0:
+        return pd.DataFrame()
+    
     oneM = np.moveaxis(oneLR.values.reshape(oneLR.shape[0], 2, int(oneLR.shape[1]/2)), [0, 1], [1, 0])
     oneM = np.expand_dims(oneM, axis=3)
     oneMx = oneM[0,:,:,:]
@@ -165,31 +138,35 @@ def processBrood(base, oneLR, name, ext, broodSource):
     circleR =np.reshape(circleR, circleR.shape + (1,1))
     circleR = np.moveaxis(circleR, [0,1], [3, 0])
 
-    distances = ((oneMx-circleX)**2 + (oneMy-circleY)**2)**0.5 - circleR
-    distances = np.squeeze(np.moveaxis(distances, [0,1,2,3], [3,0,1,2]))
-    if len(distances.shape) == 2:
-        distances = np.expand_dims(distances, 1)
+    distances2 = ((oneMx-circleX)**2 + (oneMy-circleY)**2)**0.5 - circleR
+    distances2 = np.squeeze(np.moveaxis(distances2, [0,1,2,3], [3,0,1,2]))
+    
+    if len(oneLR.columns) == 2:
+        distances2 = np.expand_dims(distances2, 1)
+    if len(labels) == 1:
+        distances2 = np.expand_dims(distances2, 2)
 
     distDF2 = pd.DataFrame()
-    for id in range(distances.shape[1]):
-        newdist = pd.DataFrame(distances[:,id,:])
+    for id in range(distances2.shape[1]):
+        newdist = pd.DataFrame(distances2[:,id,:])
         newdist.index = oneLR.index
-        newdist.columns = pd.MultiIndex.from_tuples([('distM_'+circle['label'][j]+'_'+str(circle['object index'][j]), oneLR.columns[id][1]) for j in range(len(circle['label']))], names = [None, 'ID'])
+        identity = oneLR.columns[id][1]
+        newdist.columns = pd.MultiIndex.from_tuples([(l, identity) for l in labels], names = [None, 'ID'])
         distDF2 = pd.concat([distDF2, newdist], axis = 1)
-    
+    return distDF2
+
+def minimumDistancePolygon(oneLR, eggs):
     #distance to closet point: polygon
     eggs = eggs.reset_index()
     columns = list()
     for i in range(len(eggs.drop_duplicates('object index'))):
-        for j in range(distances.shape[1]):
+        for j in range(int(len(oneLR.columns)/2)):
             columns.append(('distM_'+eggs['label'][i]+'_'+str(eggs['object index'][i]), oneLR.columns[j][1]))
-    
     if len(columns) == 0:
-        return pd.concat([oneLR, distDF, distDF2], axis=1)
+        return pd.DataFrame()
     
     distDF3 = pd.DataFrame(index = oneLR.index, columns =  pd.MultiIndex.from_tuples(columns))
     
-
     for i in range(distDF3.shape[0]):
         for j in range(distDF3.shape[1]):
             obj, bee = distDF3.columns[j]
@@ -213,15 +190,75 @@ def processBrood(base, oneLR, name, ext, broodSource):
                             ptDist.append(minDistance(A, B, P))
 
                 distDF3.iloc[i,j] = min(ptDist)
+    return distDF3
 
-    
+def processBrood(base, oneLR, name, ext, broodSource):
+    if os.path.exists(os.path.join(broodSource, '_'.join(base.split('_')[0:2]) + ext)):
+        full = pd.read_csv(os.path.join(broodSource, '_'.join(base.split('_')[0:2]) + ext))
+    else:
+        print('Missing nest image data, did you mean to run brood functions?')
+        return oneLR
+    #split
+    if name == 'Left':
+        fullLeft = full[full['x'] < np.nanmean(oneLR['centroidX'].to_numpy())]
+    elif name == "Right":
+        fullRight = full[full['x'] > np.nanmean(oneLR['centroidY'].to_numpy())]
+
+    #Don't care about areana
+    brood = full[full['label'] != 'Arena perimeter (polygon)']
+
+    #centroid: all
+    eggs = brood[brood['radius'].isna()]
+    allbrood = brood.dropna(axis =0)
+    for i in set(eggs['object index']):
+        try:
+            egg = eggs[eggs['object index'] == i].reset_index()
+            x = shapely.Polygon(np.array(egg[['x', 'y']])).centroid.x
+            y = shapely.Polygon(np.array(egg[['x', 'y']])).centroid.y
+            eggRow = pd.Series([i, egg.label[0],'polygon',x,y,np.nan])
+            eggRow.index = allbrood.columns
+            allbrood = pd.concat([allbrood.T,eggRow],axis=1).T
+        except Exception as e:
+            print(e)
+            errorFile = open('Error.csv', 'a')
+            try:
+                errorFile.write(base + ', object ' + str(i) + ': ' + egg['label'][0] + '\n')
+                errorFile.write(str(e) + '\n')
+            except:
+                errorFile.write('Cannot read label, printing entire list of objects' + '\n')
+                errorFile.write(egg)
+                errorFile.write(str(e) + '\n')
+                                
+                
+            errorFile.close()
+            if brood[brood['object index'] == i].shape[1] > 0:
+                brood[brood['object index'] == i] = np.nan
+                brood = brood.dropna(axis = 0)
+            if eggs[eggs['object index'] == i].shape[1] > 0:
+                eggs[eggs['object index'] == i] = np.nan
+                eggs = eggs.dropna(axis = 0)
+            if allbrood[allbrood['object index'] == i].shape[1] > 0:
+                allbrood[allbrood['object index'] == i] = np.nan
+                allbrood = allbrood.dropna(axis = 0)
+            continue
+
+
+    allbrood = allbrood.reset_index()
+
+    distDF = distanceFromCentroid(oneLR, allbrood)
+    distDF2 = minimumDistanceCircle(brood, oneLR)
+    distDF3 = minimumDistancePolygon(oneLR, eggs)
+
     return pd.concat([oneLR, distDF, distDF2, distDF3], axis=1)
 
 def main():
     """Main entry point of program. For takes in the path to a folder and a list of functions to run. Results will be written to Analysis.csv in the current directory."""
     opt = vars(parse_opt())
-    opt['bombus'] = True
-    output = pd.DataFrame()
+    if os.path.exists('Analysis.csv'):
+        print('I found a file named Analysis.csv in the current working directory and will be adding to the file.')
+        output = pd.read_csv('Analysis.csv')
+    else:
+        output = pd.DataFrame()
     funcs = [f for f in getmembers(baseFunctions) if isfunction(f[1]) and f[1].__module__ == 'baseFunctions']
     if opt['brood']:
         funcs = funcs + [f for f in getmembers(broodFunctions) if isfunction(f[1]) and f[1].__module__ == 'broodFunctions']
@@ -232,7 +269,7 @@ def main():
                 if opt['bombus']:
                     if 'mjpeg' in f and os.path.exists(os.path.join(dir, f).replace(".mjpeg", opt['extension'])):
                                 v = os.path.join(dir, f)
-                                print('Analyzing: ' + f)
+                                print('Analyzing: ' + v)
                                 workerID, Date, Time = f.split("_")
                                 Time = Time.replace(".mjpeg", "").replace("-", ":")
                                 trackingResults = pd.read_csv(v.replace(".mjpeg", opt['extension']))
@@ -287,9 +324,10 @@ def main():
             oneVid = pd.concat([oneVid, fullAnalysis], axis=1)
 
             output = pd.concat([output, oneVid], ignore_index=True, axis=0)
+            output.to_csv(path_or_buf="Analysis.csv")
             print('Done!')
     
-    output.to_csv(path_or_buf="Analysis.csv")
+        output.to_csv(path_or_buf="Analysis.csv")
     print("All done!")
     return 0
 
