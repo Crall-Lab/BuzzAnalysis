@@ -28,11 +28,13 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 def parse_opt():
     parser = argparse.ArgumentParser()
     parser.add_argument('--source', '-s', type=str, default='testCSV', help='Directory containing data. Defaults to current working directory.')
-    parser.add_argument('--extension', '-e', type=str, default='.csv', help='String at end of all data files from tracking. Defaults to "_updated.csv"')
+    parser.add_argument('--extension', '-e', type=str, default='.csv', help='String at end of all data files from tracking. Defaults to "_updated.csv".')
     parser.add_argument('--brood', '-b', type=str, default=None, help='Provide path to brood data to run brood functions.')
-    parser.add_argument('--broodExtension', '-x', type=str, default='_nest_image.csv', help='String at end of all data files (must be CSVs) containing brood data. Defaults to "_nest_image.csv"')
+    parser.add_argument('--broodExtension', '-x', type=str, default='_nest_image.csv', help='String at end of all data files (must be CSVs) containing brood data. Defaults to "_nest_image.csv".')
     parser.add_argument('--whole', '-w', action='store_true', help='Do not split frame into two when analyzing.')
     parser.add_argument('--bombus', '-z', action='store_true', help='Data is from rig, run alternative search for data files.')
+    parser.add_argument('--outFile', '-o', type=str, default='Analysis.csv', help='Path to output file. Defaults to "Analysis.csv".')
+
     return parser.parse_args()
 
 def restructure_tracking_data(rawOneLR):
@@ -254,9 +256,9 @@ def processBrood(base, oneLR, name, ext, broodSource):
 def main():
     """Main entry point of program. For takes in the path to a folder and a list of functions to run. Results will be written to Analysis.csv in the current directory."""
     opt = vars(parse_opt())
-    if os.path.exists('Analysis.csv'):
+    if os.path.exists(opt['outFile']):
         print('I found a file named Analysis.csv in the current working directory and will be adding to the file.')
-        output = pd.read_csv('Analysis.csv')
+        output = pd.read_csv(opt['outFile'])
     else:
         output = pd.DataFrame()
     funcs = [f for f in getmembers(baseFunctions) if isfunction(f[1]) and f[1].__module__ == 'baseFunctions']
@@ -324,10 +326,10 @@ def main():
             oneVid = pd.concat([oneVid, fullAnalysis], axis=1)
 
             output = pd.concat([output, oneVid], ignore_index=True, axis=0)
-            output.to_csv(path_or_buf="Analysis.csv")
+            output.to_csv(path_or_buf=opt['outFile'])
             print('Done!')
     
-        output.to_csv(path_or_buf="Analysis.csv")
+        output.to_csv(path_or_buf=opt['outFile'])
     print("All done!")
     return 0
 

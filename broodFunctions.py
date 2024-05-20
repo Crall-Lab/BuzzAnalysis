@@ -194,6 +194,21 @@ def PropWaxPotTime(broodLR):
         out = pd.Series(index = row.index)
         out.index.name = None
         return out
+    
+def PropNectarTime(broodLR):
+    """Proportion of time spent on nectar, 'on' as defined by user."""
+    nectar = broodLR[[col for col in broodLR.columns if 'distM_Nectar' in col[0]]]
+    if nectar.shape[1] > 0:   
+        nectar.columns = [('distM' + str(colname[1])) for colname in nectar.columns]
+        closest = nectar.T.groupby(nectar.T.index).min().T
+        out = closest < onDist
+        out.columns = [int(i.split('M')[1]) for i in out.columns]
+        return out.mean()
+    else:
+        row = broodLR.centroidX.iloc[0]
+        out = pd.Series(index = row.index)
+        out.index.name = None
+        return out    
 
 def PropInactiveTime(broodLR):
     """Proportion of time spent away from next and food and not moving, 'on' and 'moving' as defined by user."""
