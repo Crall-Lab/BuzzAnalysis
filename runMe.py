@@ -258,7 +258,7 @@ def main():
     """Main entry point of program. For takes in the path to a folder and a list of functions to run. Results will be written to Analysis.csv in the current directory."""
     opt = vars(parse_opt())
     if os.path.exists(opt['outFile']):
-        print('I found a file named Analysis.csv in the current working directory and will be adding to the file.')
+        print('I found a file named ' + opt['outFile'] + ' in the current working directory and will be adding to the file.')
         output = pd.read_csv(opt['outFile'])
     else:
         output = pd.DataFrame()
