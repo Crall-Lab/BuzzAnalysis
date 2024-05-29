@@ -155,6 +155,7 @@ def minimumDistanceCircle(brood, oneLR):
         identity = oneLR.columns[id][1]
         newdist.columns = pd.MultiIndex.from_tuples([(l, identity) for l in labels], names = [None, 'ID'])
         distDF2 = pd.concat([distDF2, newdist], axis = 1)
+    distDF2[distDF2 < 0] = 0
     return distDF2
 
 def minimumDistancePolygon(oneLR, eggs):

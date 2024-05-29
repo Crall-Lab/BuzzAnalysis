@@ -197,7 +197,7 @@ def PropWaxPotTime(broodLR):
     
 def PropNectarTime(broodLR):
     """Proportion of time spent on nectar, 'on' as defined by user."""
-    nectar = broodLR[[col for col in broodLR.columns if 'distM_Nectar' in col[0]]]
+    nectar = broodLR[[col for col in broodLR.columns if 'distM_nectar' in col[0]]]
     if nectar.shape[1] > 0:   
         nectar.columns = [('distM' + str(colname[1])) for colname in nectar.columns]
         closest = nectar.T.groupby(nectar.T.index).min().T
