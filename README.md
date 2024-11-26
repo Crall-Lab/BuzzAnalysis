@@ -57,19 +57,19 @@ The results of the analysis can then be found in *Analysis.csv* within the BuzzA
 ## Avaliable tests
 ### Base Functions
 - trackedFrames: Gives number of frames a bee is found in
-- distSC: Gives mean distance to social center of a hive
-- meanAct: Gives mean ratio of time spent moving
+- distSC: Gives mean distance to social center of a hive (social center calculated as centroid of all tracked positions within the video)
+- meanAct: Gives mean proportion of time spent moving of 
 - meanSpeed: Gives mean moving speed
 - meanIBD: Gives mean distance to other bees in cm
-- totalInt: Gives total number of interactions between bees in a video
-- totalIntFrames: Gives number of frames in a video where at least one interaction is detected.
+- totalInt: Gives total number of interactions based on proximity (between between focal bee and all other bees) within a video
+- totalIntFrames: Gives total number of possible interactions between focal bee and all other bees in a video (i.e., total number of tracked frames for all other bees)
 - meanX: Gives mean x-coordinate of bee.
 - meanY: Gives mean y-coordiante of bee.
 - varSpeed: Gives varience of speed of bee.
 - medianMinDistToOthers: Gives median of minimum distance in each frame to other bees.
 
 ### Brood Functions
-- meanEggDistM: Gives mean distance to eggs across frames.
+- meanEggDistM: Gives mean distance to eggs across frames (in cm).
 - meanLarvaeDistM: Gives mean distance to larvae across frames.
 - PropLarvaeTime: Gives proportion of time spent on larvae.
 - meanPupaeDistM: Gives mean distance to pupae across frames.
