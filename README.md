@@ -42,6 +42,7 @@ You can also run BuzzAnalysis with the following flags:
 - --broodExtension, -x: String at end of all data files (must be CSVs) containing brood data. Defaults to "_nest_image.csv".
 - --whole, -w: Do not split frame into two when analyzing.
 - --bombus, -z: Data is from rig, run alternative search for data files.
+- -o: add specific output file (if not specified, writes to 'Analysis.csv' in current working directory)
 
 <br>
 
