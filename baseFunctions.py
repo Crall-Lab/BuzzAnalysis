@@ -35,6 +35,7 @@ def meanSpeed(oneLR):
     act, speed = movement_metrics(oneLR)
     speed[act != 1] = np.nan #For moving speed matrix, replace all frames where bees are not detected as moving with nans
     return np.nanmean(speed, axis=0)
+    
 
 def meanIBD(oneLR):
     """Calculates mean distance to other bees in cm."""
@@ -56,7 +57,7 @@ def totalInt(oneLR):
     ib_dists = interbee_distance_matrix(oneLR)
     for fn in range(len(ib_dists)):
         frame_dists= ib_dists[fn]
-        frame_dists[frame_dists==0] = np.Inf
+        frame_dists[frame_dists==0] = np.inf
         int_mat = frame_dists < interaction_distance_cutoff
         int_mat = 1*int_mat
 
@@ -79,7 +80,7 @@ def totalIntFrames(oneLR):
 
     for fn in range(len(ib_dists)):
         frame_dists= ib_dists[fn]
-        frame_dists[frame_dists==0] = np.Inf
+        frame_dists[frame_dists==0] = np.inf
         int_mat = frame_dists < interaction_distance_cutoff
         int_mat = 1*int_mat
 
