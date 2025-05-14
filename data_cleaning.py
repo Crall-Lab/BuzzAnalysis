@@ -166,83 +166,72 @@ def drop_duplicates_clean(df, return_val, drop_unresolvable=True):
 
 
 # Updated function to interpolate missing frames only if the gap between them is less than or equal to max_frame_gap
+# Updated on May 14th by August to add an interpolation column marking 0 as not an interpolated row, and 1 as yes interpolated
 def interpolate(df, max_seconds_gap, actual_frames_per_second):
-
     max_frame_gap = int(max_seconds_gap * actual_frames_per_second)
     print(max_frame_gap)
-    # Ensure the data is sorted by frame
+
+    # Ensure the data is sorted by ID and frame
     df.sort_values(by=['ID', 'frame'], inplace=True)
     
+    # Mark all original rows as not interpolated
+    df["interpolated"] = 0
+
     # Group by bee ID
     grouped = df.groupby('ID')
-    
+
     # Placeholder for the new DataFrame with interpolated values
     interpolated_dfs = []
-    
+
     for bee_id, group in grouped:
         # Ensure group is sorted by frame
-        group = group.sort_values('frame')
+        group = group.sort_values('frame').copy()
         
         # Calculate the frame difference between consecutive rows
         group['frame_diff'] = group['frame'].diff().fillna(0).astype(int)
         
         # Placeholder list to store the interpolated results for this group
         interpolated_rows = []
-        
+
         # Iterate over the rows of the group
         for i in range(len(group)):
             row = group.iloc[i]
             interpolated_rows.append(row)
-            
+
             # Get the next row if it exists
             if i + 1 < len(group):
                 next_row = group.iloc[i + 1]
                 # If the frame difference is less than or equal to the max frame gap, interpolate
                 if 0 < next_row['frame_diff'] <= max_frame_gap:
-                    # Number of frames to interpolate
                     num_frames_to_interpolate = next_row['frame_diff'] - 1
-                    # Generate interpolated frames
                     for n in range(1, num_frames_to_interpolate + 1):
                         interp_row = row.copy()
                         ratio = n / next_row['frame_diff']
-                        # Interpolate numeric columns
+                        # Interpolate the position columns
                         for col in ['centroidX', 'centroidY', 'frontX', 'frontY']:
                             interp_row[col] = row[col] + (next_row[col] - row[col]) * ratio
-                        # Calculate the correct frame number for the interpolated frame
-                        interp_row['frame'] = row['frame'] + n
+                        # Set frame number and interpolation flag
+                        interp_row['frame'] = int(row['frame'] + n)
+                        interp_row["interpolated"] = 1
                         interpolated_rows.append(interp_row)
-        
+
         # Create a DataFrame from the list of rows
         interpolated_group = pd.DataFrame(interpolated_rows)
-        
-        # Drop the frame_diff column as it is no longer needed
+
+        # Drop temporary column
         interpolated_group.drop(columns=['frame_diff'], inplace=True)
-        
-        # Append the group to the list of DataFrames
+
+        # Append the group to the list
         interpolated_dfs.append(interpolated_group)
-    
-    # Concatenate all the interpolated groups into a single DataFrame
+
+    # Concatenate all groups
     interpolated_df = pd.concat(interpolated_dfs, ignore_index=True)
-    
-    # Sorting the DataFrame by 'ID' and 'frame' for better readability
+
+    # Sort for clarity
     interpolated_df.sort_values(by=['ID', 'frame'], inplace=True)
-    
+
     return interpolated_df
 
-def remove_jumps(interpolated_df):
-
-    unique_ids = interpolated_df["ID"].unique() 
-    for bee_id in unique_ids:
-        bee_df = interpolated_df[ interpolated_df['ID'] == bee_id]
-        bee_sub_df = bee_df.loc[:, ['frame', 'centroidX', 'centroidY']]
-        diff_df = bee_sub_df.diff()
-
-    for index, row in diff_df.iterrows():
-        #exclude rows that jump more than 500 pixels over a single frame
-        if row['frame'] == 1 and math.sqrt(row['centroidX']**2 + row['centroidY']**2) > 500:
-            interpolated_df.drop(index, axis=0, inplace=True)
-    
-    return interpolated_df
 
 def main():
 	print("I am a python module, I am not run by myself. I just contain functions that are imported by other scripts to use!")
