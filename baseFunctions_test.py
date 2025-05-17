@@ -11,7 +11,6 @@ import numpy as np
 from aux import *
 from params import *
 
-#Tests (all tests should be vectorized)
 def trackedFrames(oneLR):
     """Calculates number of frames where at least one tags is detected"""
     return np.sum(~np.isnan(oneLR['centroidX']))
@@ -26,14 +25,9 @@ def distSC(oneLR):
     return mean_scd
 
 def meanAct(oneLR):
-    """Return mean activity ratio (per bee), and append frame-level movement flags."""
+    """Gives mean ratio of time spent moving"""
     act = movement_metrics(oneLR)[0]
-
-    frame_vectors = act.copy()
-    frame_vectors.columns = [f'meanAct_{i}' for i in frame_vectors.columns]
-
-    mean_vals = np.nanmean(act, axis=0)
-    return mean_vals, frame_vectors
+    return np.nanmean(act, axis=0)
 
 def meanSpeed(oneLR):
     """Gives mean moving speed"""
