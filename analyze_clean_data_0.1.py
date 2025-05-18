@@ -75,6 +75,7 @@ def _find_brood_map(stem: str, brood_dir: str, brood_ext: str):
 def processBrood(basename, oneLR, LR_name, brood_dir, brood_ext):
     stem = '_'.join(basename.split('_')[0:2]).replace('-', '_')
     map_path = _find_brood_map(stem, brood_dir, brood_ext)
+    print(f"DEBUG  looking for brood map  {stem}  →  {map_path}")
     if map_path is None:
         print(f"⚠  Brood map not found for {basename}")
         return oneLR

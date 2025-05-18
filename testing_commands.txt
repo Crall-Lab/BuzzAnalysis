@@ -7,6 +7,6 @@ python3 01_split_lr.py -e raw.csv -s /Volumes/crall2/Crall_Lab/BuzzAnalysis_test
 python3 02_clean_data.py  -s /Volumes/crall2/Crall_Lab/BuzzAnalysis_testing/test_set -i --real-fps 4.5
 
 # Analysis
-python runMe13.py -s /Volumes/crall2/Crall_Lab/BuzzAnalysis_testing/test_set -o test_analysis.csv -b /Volumes/crall2/Crall_Lab/BuzzAnalysis_testing/test_set
+python analyze_clean_data_0.1.py -s /Volumes/crall2/Crall_Lab/BuzzAnalysis_testing/test_set -o test_analysis.csv -b /Volumes/crall2/Crall_Lab/BuzzAnalysis_testing/test_set -x 'nest_image.csv'
 
 python visualize_tracking.py -s /Volumes/crall2/Crall_Lab/BuzzAnalysis_testing/test_set/ --fps 30 --radius 6
