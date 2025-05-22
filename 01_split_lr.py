@@ -36,11 +36,11 @@ def main():
     p.add_argument("-t","--threshold", type=float, default=DEF_THRESHOLD)
     p.add_argument("-w","--whole", action="store_true",
                    help="Skip L/R split; keep full arena and label as Whole")
-    a = p.parse_args()
+    args = p.parse_args()
 
-    files = list(iter_files(a.source, a.extension))       # materialise first
+    files = list(iter_files(args.source, args.extension))       # materialise first
     if not files:
-        print(f"[split-lr] ❌  No files ending with “{a.extension}” found in "
+        print(f"[split-lr] ❌  No files ending with “{args.extension}” found in "
               f"{os.path.abspath(a.source)}.", file=sys.stderr)
         sys.exit(1)
 
@@ -59,6 +59,7 @@ def main():
 
         for lr, part in split_df(df, a.threshold, a.whole).items():
             out = os.path.join(subdir, f"{stem}_{lr}.csv")
+            part.sort_values(by=['ID', 'frame'], inplace=True)
             save_df(part, out)
             print("✔", out)
 

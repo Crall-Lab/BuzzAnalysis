@@ -14,27 +14,118 @@ import math
 #I think the third detection would be fine in this case.
 #BUT WAIT: in the scenario where bee 20 is tracked in 5,6,7: if detection 6 is the false detection, the diff row between 6 and 7
 #would also be flagged, and would detection 7 be removed? Needs testing! 
-def remove_jumps(interpolated_df):
+import math
+import pandas as pd
+import os
 
-    unique_ids = interpolated_df["ID"].unique() 
-    for bee_id in unique_ids:
-        bee_df = interpolated_df[ interpolated_df['ID'] == bee_id]
-        bee_sub_df = bee_df.loc[:, ['frame', 'centroidX', 'centroidY']]
-        diff_df = bee_sub_df.diff()
+def remove_jumps(df, args):
+    """
+    Flags suspicious jumps in ArUco tag tracking data and logs jump rows + neighbors.
 
-    for index, row in diff_df.iterrows():
-        #exclude rows that jump more than 500 pixels over a single frame
-        if row['frame'] == 1 and math.sqrt(row['centroidX']**2 + row['centroidY']**2) > 500:
-            interpolated_df.drop(index, axis=0, inplace=True)
-    
-    return interpolated_df
-	
+    Args:
+        interpolated_df (pd.DataFrame): tracking data with columns ['ID', 'frame', 'centroidX', 'centroidY']
+        jump_thresh (float): pixel threshold for detecting jumps
+        log_path (str): path to append the jump log CSV file
+        video_id (str): identifier for the current video
+
+    Returns:
+        pd.DataFrame: DataFrame with 'flagged_as_jump' column added
+    """
+    cleaned_df = df.copy()
+    cleaned_df['flagged_as_jump'] = False
+    jump_thresh = args.remove_jumps
+    log_path = f"{os.path.dirname(args.source)}/{os.path.basename(args.source)}_jump_log.csv"
+    print(log_path)
+
+    if len(df['filename'].unique()) == 1:
+        video_id = df.loc[0, 'filename']
+        print(video_id)
+
+
+    log_entries = []
+
+    for bee_id in cleaned_df['ID'].unique():
+        bee_df = cleaned_df[cleaned_df['ID'] == bee_id].sort_values('frame')
+        positions = bee_df[['centroidX', 'centroidY']].values
+        frames = bee_df['frame'].values
+        indices = bee_df.index.values
+
+        for i in range(1, len(positions) - 1):
+            frame_prev = frames[i - 1]
+            frame_curr = frames[i]
+            frame_next = frames[i + 1]
+
+            if frame_curr - frame_prev == 1 and frame_next - frame_curr == 1:
+                prev = positions[i - 1]
+                curr = positions[i]
+                next = positions[i + 1]
+
+                dist_prev = math.dist(prev, curr)
+                dist_next = math.dist(curr, next)
+
+                if dist_prev > jump_thresh and dist_next > jump_thresh:
+                    jump_index = indices[i]
+                    prev_index = indices[i - 1]
+                    next_index = indices[i + 1]
+
+                    cleaned_df.loc[jump_index, 'flagged_as_jump'] = True
+
+                    # Add log entries
+                    for idx, label in zip([prev_index, jump_index, next_index], ['neighbor', 'jump', 'neighbor']):
+                        row = cleaned_df.loc[idx].copy()
+                        row['video'] = video_id
+                        row['label'] = label
+                        log_entries.append(row)
+
+    # Append to CSV log
+    if log_entries:
+        log_df = pd.DataFrame(log_entries)
+        log_columns = ['video', 'ID', 'frame', 'centroidX', 'centroidY', 'label']
+        log_df = log_df[log_columns]
+
+        write_header = not os.path.exists(log_path)
+        print(f"write_header: {write_header}")
+        log_df.to_csv(log_path, mode='a', header=write_header, index=False)
+    else:
+        print("No jumps detected -> no jump log written")
+    return cleaned_df
+
+def summarize_jump_log(args):
+    """
+    Summarize total jump detections per bee across all videos.
+
+    Args:
+        log_path (str): path to the CSV log file
+
+    Prints:
+        Total jump counts per bee ID and optional per video.
+    """
+    log_path = f"{os.path.dirname(args.source)}/{os.path.basename(args.source)}_jump_log.csv"
+
+    if not os.path.exists(log_path):
+        print("No log file found.")
+        return
+
+    log_df = pd.read_csv(log_path)
+
+    summary = (
+        log_df[log_df['label'] == 'jump']
+        .groupby('ID')
+        .size()
+        .reset_index(name='n_jumps')
+        .sort_values('n_jumps', ascending=False)
+    )
+
+    print("🐝 Potential Tag Jump Summary by Bee ID:")
+    print(summary.to_string(index=False))
+
 #check for multiples of the same tag in each frame
 def return_duplicate_bees(df):
     df.drop_duplicates(inplace=True)  # Drop completely duplicate rows
     try:
-        df['duplicate_in_frame'] = df.duplicated(['filename', 'ID', 'frame', 'colony number'], keep=False)
-        if True in df['duplicate_in_frame'].values:
+        #for the duplicated function based on specific columns, keep=False makes it so that both duplicates are marked True
+        df['in_frame_duplicate'] = df.duplicated(['filename', 'ID', 'frame', 'colony number'], keep=False)
+        if True in df['in_frame_duplicate'].values:
             print('Yes, there are duplicate tag readings in the same frame! They’ve been marked True in the duplicates column.')
             return df, 0
         else:
@@ -97,7 +188,7 @@ def drop_duplicates_clean(df, return_val, drop_unresolvable=True):
     df.drop_duplicates(inplace=True)  # Drop any fully duplicated rows
 
     # Sanity check to make sure duplicates have already been identified
-    if 'duplicate' not in df.columns:
+    if 'in_frame_duplicate' not in df.columns:
         print("Hey, have you run the return_duplicate_bees() function? I'm not seeing a duplicate column in this dataframe.")
         return df
 
@@ -194,7 +285,10 @@ def drop_duplicates_clean(df, return_val, drop_unresolvable=True):
 # Updated on May 14th by August to add an interpolation column marking 0 as not an interpolated row, and 1 as yes interpolated
 def interpolate(df, max_seconds_gap, actual_frames_per_second):
     max_frame_gap = int(max_seconds_gap * actual_frames_per_second)
-    print(max_frame_gap)
+    print(f"Max frame gap based on --max-interp-sec and --real-fps: {max_frame_gap}")
+
+    #drop rows flagged as jumps to avoid interpolating over them
+    df = df[df['flagged_as_jump'] != True]
 
     # Ensure the data is sorted by ID and frame
     df.sort_values(by=['ID', 'frame'], inplace=True)
