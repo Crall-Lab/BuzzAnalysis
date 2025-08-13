@@ -320,6 +320,8 @@ def main():
                 analysis['LR'] = name
                 analysis['ID'] = analysis.index
                 oneLR = restructure_tracking_data(rawOneLR)  # one video of one colony
+                if len(oneLR) < 1:
+                    continue
                 if opt['brood']:
                     oneLR = processBrood(f, oneLR, name, opt['broodExtension'], opt['brood'])
                     oneLR.to_csv('oneLR.csv')
