@@ -196,8 +196,23 @@ def minimumDistancePolygon(oneLR, eggs):
     return distDF3
 
 def processBrood(base, oneLR, name, ext, broodSource):
-    if os.path.exists(os.path.join(broodSource, '_'.join(base.split('_')[0:2]) + ext)):
-        full = pd.read_csv(os.path.join(broodSource, '_'.join(base.split('_')[0:2]) + ext))
+    #Old
+    ### 
+    #os.path.join(broodSource, '_'.join(base.split('_')[0:2]) + ext
+    #if os.path.exists(broodMapPath):
+    ### 
+    
+    #Replaced with the following to deal with filename formatting issues
+    ### 
+    ext = '-nest_image.csv'
+    print(ext)
+    broodMapPath = os.path.join(broodSource, '_'.join(base.split('_')[0:2]).replace('-', '_') + ext)
+    print(broodMapPath)
+    
+    if os.path.exists(broodMapPath):
+    ###
+    
+        full = pd.read_csv(broodMapPath)
     else:
         print('Missing nest image data, did you mean to run brood functions?')
         return oneLR
@@ -305,6 +320,8 @@ def main():
                 analysis['LR'] = name
                 analysis['ID'] = analysis.index
                 oneLR = restructure_tracking_data(rawOneLR)  # one video of one colony
+                if len(oneLR) < 1:
+                    continue
                 if opt['brood']:
                     oneLR = processBrood(f, oneLR, name, opt['broodExtension'], opt['brood'])
                     oneLR.to_csv('oneLR.csv')
