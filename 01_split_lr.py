@@ -41,7 +41,7 @@ def main():
     files = list(iter_files(args.source, args.extension))       # materialise first
     if not files:
         print(f"[split-lr] ❌  No files ending with “{args.extension}” found in "
-              f"{os.path.abspath(a.source)}.", file=sys.stderr)
+              f"{os.path.abspath(args.source)}.", file=sys.stderr)
         sys.exit(1)
 
     for f in files:
@@ -52,12 +52,12 @@ def main():
             continue
 
         # ------------------------------------------------------------------
-        stem = os.path.basename(f)[:-len(a.extension)]    # ‘video1’ from ‘video1_raw.csv’
+        stem = os.path.basename(f)[:-len(args.extension)]    # ‘video1’ from ‘video1_raw.csv’
         subdir = os.path.join(os.path.dirname(f), stem)
         os.makedirs(subdir, exist_ok=True)
         # ------------------------------------------------------------------
 
-        for lr, part in split_df(df, a.threshold, a.whole).items():
+        for lr, part in split_df(df, args.threshold, args.whole).items():
             out = os.path.join(subdir, f"{stem}_{lr}.csv")
             part.sort_values(by=['ID', 'frame'], inplace=True)
             save_df(part, out)
