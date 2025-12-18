@@ -198,32 +198,32 @@ def drop_duplicates_clean(df, return_val, drop_unresolvable=True):
 
     if return_val == 0:
         # Subset to rows marked as duplicates
-        duplicates = df[df['duplicate'] == True]
+        duplicates = df[df['in_frame_duplicate'] == True]
 
         # Create a table of unique (video, colony, bee ID, frame) combinations with duplicates
-        dupe_keys = duplicates[['video path', 'col #', 'bee ID', 'frame number']].drop_duplicates()
+        dupe_keys = duplicates[['filename', 'colony number', 'ID', 'frame']].drop_duplicates()
 
         # Loop through each unique duplicated instance
         for _, row in dupe_keys.iterrows():
-            vid = row['video path']
-            col = row['col #']
-            bee = row['bee ID']
-            frame = row['frame number']
+            vid = row['filename']
+            col = row['colony number']
+            bee = row['ID']
+            frame = row['frame']
 
             # Get all the duplicated rows for this (video, colony, bee ID, frame)
             specific_duplicates = duplicates[
-                (duplicates['video path'] == vid) &
-                (duplicates['col #'] == col) &
-                (duplicates['bee ID'] == bee) &
-                (duplicates['frame number'] == frame)
+                (duplicates['filename'] == vid) &
+                (duplicates['colony number'] == col) &
+                (duplicates['ID'] == bee) &
+                (duplicates['frame'] == frame)
             ]
 
             # Find other positions of the same bee in other frames (same video)
             nearest_position_v1 = df[
-                (df['video path'] == vid) &
-                (df['col #'] == col) &
-                (df['bee ID'] == bee) &
-                (df['frame number'] != frame)
+                (df['filename'] == vid) &
+                (df['colony number'] == col) &
+                (df['ID'] == bee) &
+                (df['frame'] != frame)
             ]
 
             # If no known positions exist in other frames, we can't resolve this duplicate
@@ -233,11 +233,11 @@ def drop_duplicates_clean(df, return_val, drop_unresolvable=True):
 
             # Find the position in another frame that is temporally closest to the duplicate frame
             nearest_position_v2 = nearest_position_v1.iloc[
-                (nearest_position_v1['frame number'] - frame).abs().argsort()[:1]
+                (nearest_position_v1['frame'] - frame).abs().argsort()[:1]
             ]
 
             # Skip resolution if the nearest frame is too far away to trust
-            if nearest_position_v2.empty or abs(nearest_position_v2['frame number'].values[0] - frame) > 16:
+            if nearest_position_v2.empty or abs(nearest_position_v2['frame'].values[0] - frame) > 16:
                 df.loc[specific_duplicates.index, 'unresolvable_duplicate'] = True
                 continue
 
@@ -248,10 +248,10 @@ def drop_duplicates_clean(df, return_val, drop_unresolvable=True):
 
             # Drop all other candidates in the same frame with same ID
             drop_idxs = df[
-                (df['video path'] == vid) &
-                (df['col #'] == col) &
-                (df['bee ID'] == bee) &
-                (df['frame number'] == frame) &
+                (df['filename'] == vid) &
+                (df['colony number'] == col) &
+                (df['ID'] == bee) &
+                (df['frame'] == frame) &
                 ((df['centroidX'] != tag_to_keep['centroidX']) |
                  (df['centroidY'] != tag_to_keep['centroidY']))
             ].index
@@ -259,19 +259,19 @@ def drop_duplicates_clean(df, return_val, drop_unresolvable=True):
 
             # Mark the kept tag as a resolved original duplicate
             good_idx = df[
-                (df['video path'] == vid) &
-                (df['col #'] == col) &
-                (df['bee ID'] == bee) &
-                (df['frame number'] == frame) &
+                (df['filename'] == vid) &
+                (df['colony number'] == col) &
+                (df['ID'] == bee) &
+                (df['frame'] == frame) &
                 (df['centroidX'] == tag_to_keep['centroidX']) &
                 (df['centroidY'] == tag_to_keep['centroidY'])
             ].index
-            df.loc[good_idx, 'duplicate'] = False
+            df.loc[good_idx, 'in_frame_duplicate'] = False
             df.loc[good_idx, 'og_duplicate'] = True
 
         # Optionally remove any unresolved duplicates
         if drop_unresolvable:
-            df.drop(df[df['duplicate'] == True].index, inplace=True)
+            df.drop(df[df['unresolvable_duplicate'] == True].index, inplace=True)
 
     elif return_val == 1 and isinstance(df, pd.DataFrame):
         # If no duplicates existed, still ensure tracking columns exist
@@ -343,13 +343,20 @@ def interpolate(df, max_seconds_gap, actual_frames_per_second):
         # Append the group to the list
         interpolated_dfs.append(interpolated_group)
 
-    # Concatenate all groups
-    interpolated_df = pd.concat(interpolated_dfs, ignore_index=True)
+    try:
+        # Concatenate all groups
+        interpolated_df = pd.concat(interpolated_dfs, ignore_index=True)
 
-    # Sort for clarity
-    interpolated_df.sort_values(by=['ID', 'frame'], inplace=True)
+        # Sort for clarity
+        interpolated_df.sort_values(by=['ID', 'frame'], inplace=True)
 
-    return interpolated_df
+        return interpolated_df
+    
+    except ValueError: #I just got a value error saying there arent groups to concatenate?? Not sure what that means in this context, am investigating...
+
+        print(df.shape)
+        return df #Try returning the original dataframe instead
+
 
 
 def main():

@@ -12,6 +12,7 @@ from runMe13 import restructure_tracking_data                # reuse proven help
 import pickle, pathlib
 
 def compute(one_clean_csv, args):
+    print("Got to compute")
     raw = pd.read_csv(one_clean_csv)
     # Re-use proven pivot / restructure function
     # Supply dummy opts dict (only remove_jumps and interpolate flags needed)
@@ -22,6 +23,7 @@ def compute(one_clean_csv, args):
     ib_dist = interbee_distance_matrix(pivot)        # 3-D array (frames × bees × bees)
     npz_path = one_clean_csv.replace("_clean.csv","_intermediate.npz")
     np.savez_compressed(npz_path, interbee=ib_dist)
+    print("saved npz")
     # Light intermediate ---------------------------------------------------
     feather_path = one_clean_csv.replace("_clean.csv","_pivot.feather")
     ensure_dir(feather_path)
@@ -34,9 +36,19 @@ def main():
     p.add_argument("-c","--cores", type=int, default=1)
     a = p.parse_args()
 
-    for f in iter_files(a.source, "_clean.csv"):
-        n = compute(f, a)
-        print(f"✔ {f}   ({n} bees)")
+    print(a.source)
+    #for f in iter_files(a.source, "_clean.csv"):
+    for paths, dirs, files in os.walk(a.source):
+        print("Got here")
+        for dir in dirs:
+            print(dir)
+            for filename in os.listdir(dir):
+                if filename.endswith("_clean.csv"):
+
+                    print("starting")
+                    print(a.source)
+                    n = compute(filename, a)
+                    print(f"✔ {filename}   ({n} bees)")
 
 if __name__ == "__main__":
     main()

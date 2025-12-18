@@ -1,5 +1,18 @@
-pixels_per_cm = 172.5
-digital_noise_speed_cutoff = 2.5
-frame_per_sec = 3.7
-interaction_distance_cutoff = 172.5
-onDist = 10
+pixels_per_cm = 205
+digital_noise_speed_cutoff = 3.5
+frame_per_sec = 4.5
+interaction_distance_cutoff = 205
+onDist = 12
+
+#File naming parameters:
+#In an example filename for your data:
+#What is the position of the first and last characters representing the colony number? Please enter as a list with commas separating them, ex. [2,3] or [4,7]:
+colony_number_position = [4]
+#What is the position of the first and last characters representing the date? Please enter the same way:
+Date_position = [6,15]
+#What is the position of the first and last characters representing the hour? Please enter the same way: 18,19
+H_position = [17,18]
+#What is the position of the first and last characters representing the minute? Please enter the same way: 21,22
+M_position = [20,21]
+#What is the position of the first and last characters representing the second? Please enter the same way:
+S_position = [23,24]

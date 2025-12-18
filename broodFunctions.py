@@ -90,6 +90,46 @@ def meanWaxPotDistM(broodLR):
         result = out.groupby(out.index).mean()
         return result
     else:
+        try:
+            wax = broodLR[[col for col in broodLR.columns if 'distM_empty' in col[0] or 'distM_full' in col[0]]]
+            if wax.shape[1] > 0:
+                wax.columns = pd.MultiIndex.from_tuples([('distM', colname[1]) for colname in wax.columns])
+                out = wax.distM.mean()
+                result = out.groupby(out.index).mean()
+                return result
+            else:
+                raise Exception
+        except:
+            row = broodLR.centroidX.iloc[0] if 'centroidX' in broodLR else pd.Series(index=[])
+            out = pd.Series(index=row.index, dtype=float)
+            out[:] = np.nan
+            out.index.name = None
+            return out
+    
+def meanFullNectarPotDistM(broodLR):
+    """Mean distance to full nectar pots. Distance measured as distance to closest point in geometry."""
+    fullnp = broodLR[[col for col in broodLR.columns if 'distM_full' in col[0]]]
+    if fullnp.shape[1] > 0:
+        fullnp.columns = pd.MultiIndex.from_tuples([('distM', colname[1]) for colname in fullnp.columns])
+        out = fullnp.distM.mean()
+        result = out.groupby(out.index).mean()
+        return result
+    else:
+        row = broodLR.centroidX.iloc[0] if 'centroidX' in broodLR else pd.Series(index=[])
+        out = pd.Series(index=row.index, dtype=float)
+        out[:] = np.nan
+        out.index.name = None
+        return out
+    
+def meanEmptyWaxPotDistM(broodLR):
+    """Mean distance to full nectar pots. Distance measured as distance to closest point in geometry."""
+    emptywp = broodLR[[col for col in broodLR.columns if 'distM_empty' in col[0]]]
+    if emptywp.shape[1] > 0:
+        emptywp.columns = pd.MultiIndex.from_tuples([('distM', colname[1]) for colname in emptywp.columns])
+        out = emptywp.distM.mean()
+        result = out.groupby(out.index).mean()
+        return result
+    else:
         row = broodLR.centroidX.iloc[0] if 'centroidX' in broodLR else pd.Series(index=[])
         out = pd.Series(index=row.index, dtype=float)
         out[:] = np.nan
@@ -157,7 +197,7 @@ def medianClosestBroodDistM(broodLR):
         out.index.name = None
         return out
 
-def medianClosesWaxPotDistM(broodLR):
+def medianClosestWaxPotDistM(broodLR):
     """Median distance to closest wax pot. Distance measured as distance to closest point in geometry."""
     wax = broodLR[[col for col in broodLR.columns if 'distM_Wax' in col[0]]]
     if wax.shape[1] > 0:   
@@ -167,11 +207,22 @@ def medianClosesWaxPotDistM(broodLR):
         out.index = [int(i.split('M')[1]) for i in out.index]
         return out
     else:
-        row = broodLR.centroidX.iloc[0] if 'centroidX' in broodLR else pd.Series(index=[])
-        out = pd.Series(index=row.index, dtype=float)
-        out[:] = np.nan
-        out.index.name = None
-        return out
+        try:
+            wax = broodLR[[col for col in broodLR.columns if 'distM_empty' in col[0] or 'distM_full' in col[0]]]
+            if wax.shape[1] > 0:
+                wax.columns = [('distM' + str(colname[1])) for colname in wax.columns]
+                closest = wax.T.groupby(wax.T.index).min().T
+                out = closest.median()
+                out.index = [int(i.split('M')[1]) for i in out.index]
+                return out
+            else:
+                raise Exception 
+        except:
+            row = broodLR.centroidX.iloc[0] if 'centroidX' in broodLR else pd.Series(index=[])
+            out = pd.Series(index=row.index, dtype=float)
+            out[:] = np.nan
+            out.index.name = None
+            return out
 
 def PropPupaeTime(broodLR):
     """Proportion of time spent on pupae, 'on' as defined by user, excluding non-detected frames."""
@@ -227,7 +278,7 @@ def PropLarvaeTime(broodLR):
 
 def PropWaxPotTime(broodLR):
     """Proportion of time spent on wax pots, 'on' as defined by user, excluding non-detected frames."""
-    wax = broodLR[[col for col in broodLR.columns if 'distM_Wax' in col[0]]]
+    wax = broodLR[[col for col in broodLR.columns if 'distM_Wax' in col[0] or 'distM_empty' in col[0] or 'distM_full' in col[0]] ]
     
     if wax.shape[1] > 0:   
         wax.columns = [('distM' + str(colname[1])) for colname in wax.columns]

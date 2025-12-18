@@ -16,9 +16,9 @@ def trackedFrames(oneLR):
     """Calculates number of frames where at least one tags is detected"""
     return np.sum(~np.isnan(oneLR['centroidX']))
 
-def distSC(oneLR):
+def distSC(oneLR, sc):
     """Given dataframe, return 1-D array containing average distance to social center."""
-    sc = nest_social_center(oneLR)
+    #sc = nest_social_center(oneLR)
     xd = oneLR['centroidX'] - sc[0]
     yd = oneLR['centroidY'] - sc[1]
     tot_d = np.sqrt(xd**2 + yd**2)
