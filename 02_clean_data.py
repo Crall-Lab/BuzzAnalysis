@@ -18,14 +18,14 @@ from data_cleaning import (return_duplicate_bees,
 from utils_io import iter_files, save_df
 
 # ──────────────────────────────────────────────────────────────────────────
-def clean_one(df, args):
+def clean_one(df, args, filename):
     # duplicates -----------------------------------------------------------
     df, flag = return_duplicate_bees(df)
     df       = drop_duplicates_clean(df, flag)
 
     # single-frame jumps ---------------------------------------------------
     if args.remove_jumps:
-        df = remove_jumps(df, args)
+        df = remove_jumps(df, args, filename)
 
     # interpolation (adds 'interpolated' column automatically) ------------
     if args.interpolate:
@@ -77,13 +77,16 @@ def main():
         \n''')
         return
     
+    colony_number = input("Please enter position of colony number in file name. Example: bumblebox-15-2021-07-01_Whole.csv has colony number 15 at the [10,12] position - the last value should be exclusive of the number.")
+
     suffix_list = [s.strip() for s in args.suffixes.split(",") if s.strip()]
     seen = 0
     for suf in suffix_list:
         for file in iter_files(args.source, suf):
             seen += 1
             df = pd.read_csv(file)
-            df_clean = clean_one(df, args)
+            filename = os.path.basename(file).replace(f"_{suf}.csv", "")
+            df_clean = clean_one(df, args, filename)
 
             out = os.path.join(os.path.dirname(file),
                                os.path.basename(file).replace(".csv","_clean.csv"))

@@ -7,12 +7,12 @@ onDist = 12
 #File naming parameters:
 #In an example filename for your data:
 #What is the position of the first and last characters representing the colony number? Please enter as a list with commas separating them, ex. [2,3] or [4,7]:
-colony_number_position = [4]
+colony_number_position = [4,5]
 #What is the position of the first and last characters representing the date? Please enter the same way:
-Date_position = [6,15]
+Date_position = [7,16]
 #What is the position of the first and last characters representing the hour? Please enter the same way: 18,19
-H_position = [17,18]
+H_position = [18,19]
 #What is the position of the first and last characters representing the minute? Please enter the same way: 21,22
-M_position = [20,21]
+M_position = [21,22]
 #What is the position of the first and last characters representing the second? Please enter the same way:
-S_position = [23,24]
+S_position = [24,25]

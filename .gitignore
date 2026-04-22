@@ -7,3 +7,8 @@ testCore
 testNest
 testCrop
 testCSV
+.venv/
+.venv-1/
+.pytest_cache/
+.vscode/
+.codex

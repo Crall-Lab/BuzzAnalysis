@@ -18,9 +18,10 @@ import math
 import pandas as pd
 import os
 
-def remove_jumps(df, args):
+def remove_jumps(df, args, filename):
     """
-    Flags suspicious jumps in ArUco tag tracking data and logs jump rows + neighbors.
+    Flag suspicious jumps in ArUco tag tracking data, log them, and
+    remove the jump rows from the returned dataframe.
 
     Args:
         interpolated_df (pd.DataFrame): tracking data with columns ['ID', 'frame', 'centroidX', 'centroidY']
@@ -29,7 +30,7 @@ def remove_jumps(df, args):
         video_id (str): identifier for the current video
 
     Returns:
-        pd.DataFrame: DataFrame with 'flagged_as_jump' column added
+        pd.DataFrame: DataFrame with jump rows removed.
     """
     cleaned_df = df.copy()
     cleaned_df['flagged_as_jump'] = False
@@ -37,9 +38,11 @@ def remove_jumps(df, args):
     log_path = f"{os.path.dirname(args.source)}/{os.path.basename(args.source)}_jump_log.csv"
     print(log_path)
 
-    if len(df['filename'].unique()) == 1:
-        video_id = df.loc[0, 'filename']
-        print(video_id)
+    #if len(df['filename'].unique()) == 1:
+    #    video_id = df.loc[0, 'filename']
+    #    print(video_id)
+    video_id = filename
+    print(video_id)
 
 
     log_entries = []
@@ -88,7 +91,14 @@ def remove_jumps(df, args):
         log_df.to_csv(log_path, mode='a', header=write_header, index=False)
     else:
         print("No jumps detected -> no jump log written")
-    return cleaned_df
+
+    jump_mask = cleaned_df['flagged_as_jump']
+    n_removed = int(jump_mask.sum())
+    if n_removed:
+        cleaned_df = cleaned_df.loc[~jump_mask].copy()
+        print(f"Removed {n_removed} rows flagged as jumps")
+
+    return cleaned_df.drop(columns=['flagged_as_jump'])
 
 def summarize_jump_log(args):
     """
@@ -287,8 +297,11 @@ def interpolate(df, max_seconds_gap, actual_frames_per_second):
     max_frame_gap = int(max_seconds_gap * actual_frames_per_second)
     print(f"Max frame gap based on --max-interp-sec and --real-fps: {max_frame_gap}")
 
-    #drop rows flagged as jumps to avoid interpolating over them
-    df = df[df['flagged_as_jump'] != True]
+    # Backward compatibility for dataframes created before jumps were
+    # removed inside remove_jumps().
+    if 'flagged_as_jump' in df.columns:
+        df = df[df['flagged_as_jump'] != True].copy()
+        df = df.drop(columns=['flagged_as_jump'])
 
     # Ensure the data is sorted by ID and frame
     df.sort_values(by=['ID', 'frame'], inplace=True)

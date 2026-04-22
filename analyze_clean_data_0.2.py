@@ -66,43 +66,54 @@ def pivot_clean(df: pd.DataFrame) -> pd.DataFrame:
               .sort_index(axis=1)
               .apply(pd.to_numeric, errors='coerce'))
 
+def _extract_colony_and_date(name: str):
+    """Parse colony number and YYYY-MM-DD date from a tracking or brood filename."""
+    normalized = os.path.basename(str(name)).replace("_", "-")
+    match = re.search(r"col-?0*(\d+)-(\d{4}-\d{2}-\d{2})", normalized, flags=re.IGNORECASE)
+    if match is None:
+        return None
+    return int(match.group(1)), match.group(2)
+
+
 def _find_brood_map(stem: str, root: str, ext: str):
-    """Recursive match  <stem>*<ext>  underneath *root*."""
-    #print("Brood info")
-    #print(f"root: {root}")
-    #print(f"stem: {stem}")
-    #print(f"ext: {ext}")
-    
-    ext_clean = ext.lstrip('_-')
+    """Find a unique brood map matching the same colony and date as *stem*."""
+    target = _extract_colony_and_date(stem)
+    if target is None:
+        raise ValueError(f"Could not parse colony/date from tracking stem: {stem}")
 
-    #print(f"ext_clean: {ext_clean}")
-    #print(Path(root).rglob(f"{stem}*"))
-    #hits = sorted(Path(root).rglob(f"{stem}*")) #{ext_clean}"))
-    #hits = []
-    
+    root_path = Path(root)
+    if not root_path.exists():
+        return None
 
-    print(os.path.exists(root))
-    for paths, dirs, files in os.walk(root):
- 
-        for path in paths:
-            print(path)
-            for file in files:
+    ext_clean = ext.lstrip("_-")
+    valid_suffixes = {
+        ext_clean,
+        f"_{ext_clean}",
+        f"-{ext_clean}",
+    }
 
-                lower_file = file.replace("-", "_")
-                lower_stem = stem.replace("-", "_")
-                print(f"file: {file}")
-                print(f"stem: {stem}")
-                if lower_stem in lower_file:
-                    print("stem in file")
-                else:
-                    print("stem not in file")
-                    continue
-                if file.endswith(ext_clean):
-                    path_to_brood_csv = os.path.join(root,file)
-                    if os.path.exists(path_to_brood_csv):
-                        print("Found brood file")
-                        print(path_to_brood_csv)
-                        return path_to_brood_csv
+    matches = []
+    for path in root_path.rglob("*"):
+        if not path.is_file() or path.name.startswith("."):
+            continue
+        if not any(path.name.endswith(suffix) for suffix in valid_suffixes):
+            continue
+
+        parsed = _extract_colony_and_date(path.name)
+        if parsed == target:
+            matches.append(path)
+
+    if not matches:
+        return None
+
+    matches = sorted(matches)
+    if len(matches) > 1:
+        match_list = ", ".join(str(path) for path in matches)
+        raise ValueError(
+            f"Multiple brood maps matched colony/date {target[0]} on {target[1]}: {match_list}"
+        )
+
+    return str(matches[0])
 
 
 
@@ -119,11 +130,17 @@ def processBrood_test(basename, oneLR, LR, brood_dir, brood_ext):
     """Attach brood-distance matrices (if map present)."""
 
     # --- locate brood map file ---
-    stem = '_'.join(basename.split('_')[0:2]).replace('-', '_')
-    mp = _find_brood_map(stem, brood_dir, brood_ext)
-    if mp is None:
-        print("ERROR: Brood map could not be found")
-        return oneLR
+    p = Path(brood_dir)
+    if p.is_file() and p.suffix.lower() == ".csv":
+        mp = brood_dir
+    else:
+        stem = '_'.join(basename.split('_')[0:2]).replace('-', '_')
+        mp = _find_brood_map(stem, brood_dir, brood_ext)
+        if mp is None:
+            print("ERROR: Brood map could not be found")
+            return oneLR
+        print(type(mp))
+        print(mp)
 
     full = pd.read_csv(mp)
 
@@ -180,9 +197,9 @@ def processBrood_test(basename, oneLR, LR, brood_dir, brood_ext):
 def processBrood(basename, oneLR, LR, brood_dir, brood_ext):
     """Attach brood-distance matrices (if map present)."""
     stem = '_'.join(basename.split('_')[0:2]).replace('-', '_')
-    #print(f"stem: {stem}")
-    #print(f"brood_dir: {brood_dir}")
-    #print(f"brood_ext: {brood_ext}")
+
+
+
     mp = _find_brood_map(stem, brood_dir, brood_ext)
     if mp is None:
         print("ERROR: Brood map could not be found")
