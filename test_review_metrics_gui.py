@@ -8,9 +8,18 @@ from review_metrics_gui import (
     assess_nest_map_status,
     classify_activity_value,
     compute_activity_tables,
+    compute_interaction_count_table,
+    compute_nearest_neighbor_distance_table,
+    compute_social_center_distance_table,
+    contiguous_true_ranges,
+    convert_speed_cutoff_units,
+    convert_speed_table_units,
     discover_sessions,
+    find_tracking_csv_by_pattern,
     find_related_csvs,
     find_tracking_csvs,
+    tracking_csv_pattern,
+    tracking_csv_pattern_label,
 )
 
 
@@ -71,6 +80,36 @@ def test_discover_sessions_for_single_video(tmp_path):
     assert sessions[0].tracking_paths == (csv_path,)
 
 
+def test_tracking_csv_pattern_reuses_same_suffix_for_later_videos(tmp_path):
+    first_video = tmp_path / "video_a.mp4"
+    first_csv = tmp_path / "video_a_Whole_clean.csv"
+    next_video = tmp_path / "video_b.mp4"
+    next_csv = tmp_path / "video_b_Whole_clean.csv"
+    first_video.write_bytes(b"")
+    next_video.write_bytes(b"")
+    write_tracking(first_csv)
+    write_tracking(next_csv)
+
+    pattern = tracking_csv_pattern(first_video, first_csv)
+    session = ReviewSession(next_video, (next_csv,), tmp_path)
+
+    assert pattern == "_Whole_clean.csv"
+    assert tracking_csv_pattern_label(pattern) == "<video name>_Whole_clean.csv"
+    assert find_tracking_csv_by_pattern(session, pattern) == next_csv
+
+
+def test_tracking_csv_pattern_handles_exact_stem_csv(tmp_path):
+    video = tmp_path / "example.mp4"
+    csv_path = tmp_path / "example.csv"
+    video.write_bytes(b"")
+    write_tracking(csv_path)
+
+    pattern = tracking_csv_pattern(video, csv_path)
+
+    assert pattern == ".csv"
+    assert tracking_csv_pattern_label(pattern) == "<video name>.csv"
+
+
 def test_compute_activity_tables_respects_gui_cutoff_and_gap():
     tracking = pd.DataFrame(
         {
@@ -91,6 +130,49 @@ def test_compute_activity_tables_respects_gui_cutoff_and_gap():
     assert np.isclose(speed.loc[1, 1], 4.0)
     assert classify_activity_value(act.loc[1, 1]) == "active"
     assert classify_activity_value(act.loc[20, 1]) == "unknown"
+
+
+def test_metric_tables_compute_distances_and_interactions():
+    tracking = pd.DataFrame(
+        {
+            "frame": [0, 0, 0, 1],
+            "ID": [1, 2, 3, 1],
+            "centroidX": [0.0, 3.0, 30.0, 0.0],
+            "centroidY": [0.0, 4.0, 40.0, 10.0],
+        }
+    )
+
+    nearest = compute_nearest_neighbor_distance_table(tracking)
+    interactions = compute_interaction_count_table(tracking, cutoff=6)
+    social = compute_social_center_distance_table(tracking)
+
+    assert np.isclose(nearest.loc[0, 1], 5.0)
+    assert np.isclose(nearest.loc[0, 2], 5.0)
+    assert interactions.loc[0, 1] == 1
+    assert interactions.loc[0, 3] == 0
+    assert interactions.loc[1, 1] == 0
+    assert set(social.columns) == {1, 2, 3}
+
+
+def test_convert_speed_units_and_cutoff():
+    speed = pd.DataFrame({1: [1.0, 2.0]}, index=[0, 1])
+
+    px_sec = convert_speed_table_units(speed, "px/sec", frame_rate=5, px_per_cm=10)
+    cm_sec = convert_speed_table_units(speed, "cm/sec", frame_rate=5, px_per_cm=10)
+
+    assert px_sec.loc[1, 1] == 10.0
+    assert cm_sec.loc[1, 1] == 1.0
+    assert convert_speed_cutoff_units(2, "px/sec", frame_rate=5, px_per_cm=10) == 10
+    assert convert_speed_cutoff_units(2, "cm/sec", frame_rate=5, px_per_cm=10) == 1
+
+
+def test_contiguous_true_ranges_splits_false_values_and_frame_gaps():
+    mask = pd.Series(
+        [True, True, False, True, True, True],
+        index=[1, 2, 3, 7, 8, 10],
+    )
+
+    assert contiguous_true_ranges(mask) == [(1, 2), (7, 8), (10, 10)]
 
 
 def test_assess_nest_map_status_finds_matching_brood_csv(tmp_path):
