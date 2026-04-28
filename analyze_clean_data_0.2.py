@@ -28,10 +28,11 @@ from tqdm import tqdm
 import baseFunctions
 import broodFunctions
 import processBroodFunctions
-from aux import movement_metrics                # caches speed & activity
 from aux import mean_centroids_across_files
+from aux import configure_behavior_timing
 import pdb
 from params import colony_number_position, Date_position, H_position, M_position, S_position
+from params import frame_per_sec, max_behavior_gap_seconds
 
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -54,6 +55,10 @@ def cli():
                     help='Process only N files (debug)')
     ap.add_argument('--save-pivots', action='store_true',
                     help='Write *_pivot_enriched.feather per video')
+    ap.add_argument('--behavior-fps', type=float, default=frame_per_sec,
+                    help='Frame rate used to decide whether behavior gaps are short enough to score')
+    ap.add_argument('--max-behavior-gap-sec', type=float, default=max_behavior_gap_seconds,
+                    help='Maximum elapsed seconds between detections for behavior calculations')
     return vars(ap.parse_args())
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -282,7 +287,6 @@ def analyse_one(fpath, opt, funcs, social_center):
     pivot = pivot_clean(df)              # build wide table
     #print(fpath)
     #print(pivot.head)
-    movement_metrics(pivot)              # adds speed + activity columns
 
     if opt['brood']:
         pivot = processBrood_test(base, pivot, LR,
@@ -355,6 +359,8 @@ def job(arg): return analyse_one(*arg)
 # ══════════════════════════════════════════════════════════════════════════
 def main():
     opt = cli()
+    configure_behavior_timing(frame_rate=opt['behavior_fps'],
+                              max_gap_seconds=opt['max_behavior_gap_sec'])
 
     funcs = [(n, f) for n, f in getmembers(baseFunctions)
              if isfunction(f) and f.__module__ == 'baseFunctions']

@@ -17,6 +17,32 @@ from params import *
 from pathlib import Path
 from typing import Iterable, Union, Dict, Any, Optional
 
+_behavior_frame_per_sec = frame_per_sec
+_behavior_max_gap_seconds = globals().get("max_behavior_gap_seconds", 3)
+_behavior_speed_cutoff = digital_noise_speed_cutoff
+
+
+def configure_behavior_timing(frame_rate=None, max_gap_seconds=None, speed_cutoff=None):
+    """Set run-level timing controls for behavior metrics."""
+    global _behavior_frame_per_sec, _behavior_max_gap_seconds, _behavior_speed_cutoff
+
+    if frame_rate is not None:
+        frame_rate = float(frame_rate)
+        if frame_rate <= 0:
+            raise ValueError("frame_rate must be greater than zero")
+        _behavior_frame_per_sec = frame_rate
+
+    if max_gap_seconds is not None:
+        max_gap_seconds = float(max_gap_seconds)
+        if max_gap_seconds <= 0:
+            raise ValueError("max_gap_seconds must be greater than zero")
+        _behavior_max_gap_seconds = max_gap_seconds
+
+    if speed_cutoff is not None:
+        speed_cutoff = float(speed_cutoff)
+        if speed_cutoff < 0:
+            raise ValueError("speed_cutoff must be greater than or equal to zero")
+        _behavior_speed_cutoff = speed_cutoff
 
 
 #def nest_social_center(oneLR):
@@ -105,10 +131,35 @@ def mean_centroids_across_files(
     }
 
 
-def movement_metrics(oneLR):
-    """Returns two pd.Series(), act is whether a bee is moving in a frame, speed is the speed of a bee in a frame."""
-    speed = np.sqrt(oneLR['centroidX'].diff(axis=0)**2 + oneLR['centroidY'].diff(axis=0)**2)
-    act = speed > digital_noise_speed_cutoff
+def movement_metrics(oneLR, frame_rate=None, max_gap_seconds=None, speed_cutoff=None):
+    """Return activity and per-frame speed, ignoring movements across long gaps."""
+    if frame_rate is None:
+        frame_rate = _behavior_frame_per_sec
+    if max_gap_seconds is None:
+        max_gap_seconds = _behavior_max_gap_seconds
+    if speed_cutoff is None:
+        speed_cutoff = _behavior_speed_cutoff
+
+    frame_rate = float(frame_rate)
+    max_gap_seconds = float(max_gap_seconds)
+    speed_cutoff = float(speed_cutoff)
+    if frame_rate <= 0:
+        raise ValueError("frame_rate must be greater than zero")
+    if max_gap_seconds <= 0:
+        raise ValueError("max_gap_seconds must be greater than zero")
+    if speed_cutoff < 0:
+        raise ValueError("speed_cutoff must be greater than or equal to zero")
+
+    frame_values = pd.Series(oneLR.index, index=oneLR.index)
+    frame_values = pd.to_numeric(frame_values, errors="coerce")
+    frame_gap = frame_values.diff()
+    max_frame_gap = frame_rate * max_gap_seconds
+    valid_gap = (frame_gap > 0) & (frame_gap <= max_frame_gap)
+
+    displacement = np.sqrt(oneLR['centroidX'].diff(axis=0)**2 + oneLR['centroidY'].diff(axis=0)**2)
+    speed = displacement.div(frame_gap.replace(0, np.nan), axis=0)
+    speed = speed.where(valid_gap, np.nan)
+    act = speed > speed_cutoff
     act = 1*act
     act[np.isnan(speed)] = np.nan
 

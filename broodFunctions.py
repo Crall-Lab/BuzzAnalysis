@@ -9,6 +9,7 @@ __version__ = '0.0.1'
 import pandas as pd
 import numpy as np
 from params import *
+from aux import movement_metrics
 
 def PropBroodTime(broodLR):
     """Proportion of time spent on brood, 'on' as defined by user, excluding non-detected frames."""
@@ -364,11 +365,8 @@ def PropInactiveTime(broodLR):
         working = closest < onDist
         working.columns = [int(i.split('M')[1]) for i in working.columns]
         
-        speed = np.sqrt(broodLR['centroidX'].diff(axis=0)**2 + broodLR['centroidY'].diff(axis=0)**2)
-        act = speed > digital_noise_speed_cutoff
-        act = 1 * act
-        act[np.isnan(speed)] = np.nan
-        out = ~(working | act)
+        act = movement_metrics(broodLR)[0]
+        out = ~(working | (act == 1))
         
         result = pd.Series(index=working.columns, dtype=float)
         for bee in out.columns:

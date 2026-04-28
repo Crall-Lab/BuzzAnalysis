@@ -1,6 +1,7 @@
 pixels_per_cm = 205
 digital_noise_speed_cutoff = 3.5
 frame_per_sec = 4.5
+max_behavior_gap_seconds = 3
 interaction_distance_cutoff = 205
 onDist = 12
 
