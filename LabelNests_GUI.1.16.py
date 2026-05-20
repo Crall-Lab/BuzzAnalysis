@@ -395,6 +395,23 @@ class LabelNestsApp(QtWidgets.QWidget):
     def _labelme_module_available():
         return importlib.util.find_spec("labelme") is not None
 
+    @staticmethod
+    def _resolve_labelme_python():
+        candidates = []
+        override = os.environ.get("BUMBLEBOX_LABELME_PYTHON")
+        if override:
+            candidates.append(override)
+
+        current_env = os.path.dirname(os.path.dirname(sys.executable))
+        envs_root = os.path.dirname(current_env)
+        candidates.append(os.path.join(envs_root, "buzzanalysis_labelme", "bin", "python"))
+        candidates.append(sys.executable)
+
+        for path in candidates:
+            if path and os.path.exists(path) and os.access(path, os.X_OK):
+                return os.path.abspath(path)
+        return sys.executable
+
     def update_message_label(self):
         if not self.image_list:
             self.message_label.setText("No images found in the selected folder.")
@@ -895,8 +912,8 @@ class LabelNestsApp(QtWidgets.QWidget):
         # --- The QProcess implementation ---
         # 1. Create the QProcess instance
         self.labelme_process = QProcess(self)
-        python_exe = sys.executable
-        use_python_module = self._labelme_module_available()
+        python_exe = self._resolve_labelme_python()
+        use_python_module = python_exe != sys.executable or self._labelme_module_available()
         labelme_executable = shutil.which("labelme")
         if not use_python_module and not labelme_executable:
             QMessageBox.critical(
@@ -929,7 +946,14 @@ class LabelNestsApp(QtWidgets.QWidget):
         self.labelme_process.setArguments(arguments)
         env = QProcessEnvironment.systemEnvironment()
         venv_bin = os.path.dirname(python_exe)
+        labelme_env = os.path.dirname(venv_bin)
         env.insert("PATH", venv_bin + os.pathsep + env.value("PATH"))
+        if python_exe == sys.executable:
+            env.insert("QT_API", "pyside6")
+        else:
+            env.insert("QT_API", "pyqt5")
+            env.insert("CONDA_PREFIX", labelme_env)
+            env.insert("CONDA_DEFAULT_ENV", os.path.basename(labelme_env))
         self.labelme_process.setProcessEnvironment(env)
 
         # 5. (Optional) capture stderr so you can poke at hidden Qt errors

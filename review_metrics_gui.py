@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 import pyqtgraph as pg
 from PySide6.QtCore import QPointF, QRect, QRectF, Qt, QProcess, QSettings, QTimer, Signal
-from PySide6.QtGui import QAction, QColor, QImage, QPainter, QPen, QPixmap, QPolygonF
+from PySide6.QtGui import QAction, QBrush, QColor, QFont, QImage, QPainter, QPen, QPixmap, QPolygonF
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -25,6 +25,8 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
+    QGridLayout,
+    QGraphicsRectItem,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -42,7 +44,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from aux import movement_metrics
+from aux import mean_centroids_across_files, movement_metrics
 from nest_labeling import (
     LABEL_COLORS_BGR,
     NEST_IMAGE_EXTENSIONS,
@@ -62,10 +64,19 @@ from params import (
 
 VIDEO_EXTENSIONS = {".mp4", ".mjpeg", ".avi", ".mov", ".mkv"}
 REQUIRED_TRACKING_COLUMNS = {"frame", "ID", "centroidX", "centroidY"}
+REQUIRED_NOID_COLUMNS = {"frame", "centroidX", "centroidY"}
 SETTINGS_ORG = "BuzzAnalysis"
 SETTINGS_APP = "MetricReviewHub"
 LAST_SOURCE_PATH_KEY = "last_source/path"
 LAST_SOURCE_RANDOMIZE_KEY = "last_source/randomize"
+NOID_TAG_COLOR = QColor("#ff4fb8")
+NEST_MAP_LINE_WIDTH = 6
+TRAIL_LINE_WIDTH = 4
+NEST_INTERACTION_LINE_WIDTH = 4
+NEST_DISTANCE_LINE_WIDTH = 6
+NEST_INTERACTION_HIGHLIGHT_ALPHA = 128
+PLOT_LINE_WIDTH = 4
+PLOT_SELECTED_LINE_WIDTH = 7
 
 
 @dataclass(frozen=True)
@@ -97,6 +108,14 @@ class NestMapStatus:
     image_matches: tuple[Path, ...] = ()
 
 
+@dataclass(frozen=True)
+class NestComponent:
+    label: str
+    shape: str
+    points: tuple[tuple[float, float], ...]
+    radius: float = 0.0
+
+
 def stable_color(tag: int | str) -> QColor:
     rng = random.Random(int(tag))
     return QColor(rng.randint(55, 235), rng.randint(55, 235), rng.randint(55, 235))
@@ -112,6 +131,18 @@ def missing_tracking_columns(path: Path) -> tuple[str, ...]:
 
 def is_tracking_csv(path: Path) -> bool:
     return not missing_tracking_columns(path)
+
+
+def missing_noid_columns(path: Path) -> tuple[str, ...]:
+    try:
+        header = pd.read_csv(path, nrows=0)
+    except Exception:
+        return tuple(sorted(REQUIRED_NOID_COLUMNS))
+    return tuple(sorted(REQUIRED_NOID_COLUMNS - set(header.columns)))
+
+
+def is_noid_tag_csv(path: Path) -> bool:
+    return "noid" in path.stem.lower() and not missing_noid_columns(path)
 
 
 def _csv_priority(path: Path, stem: str) -> tuple[int, str]:
@@ -162,6 +193,10 @@ def find_related_csvs(video_path: Path, root: Path | None = None) -> tuple[Path,
 
 def find_tracking_csvs(video_path: Path, root: Path | None = None) -> tuple[Path, ...]:
     return tuple(path for path in find_related_csvs(video_path, root) if is_tracking_csv(path))
+
+
+def find_noid_tag_csvs(session: ReviewSession) -> tuple[Path, ...]:
+    return tuple(path for path in session.related_csv_paths if is_noid_tag_csv(path))
 
 
 def tracking_csv_pattern(video_path: Path, csv_path: Path) -> str:
@@ -363,6 +398,28 @@ def load_tracking(paths: Iterable[Path]) -> pd.DataFrame:
     return out.sort_values(["frame", "ID"]).reset_index(drop=True)
 
 
+def load_noid_tags(paths: Iterable[Path]) -> pd.DataFrame:
+    frames = []
+    for path in paths:
+        df = pd.read_csv(path)
+        missing = REQUIRED_NOID_COLUMNS - set(df.columns)
+        if missing:
+            raise ValueError(f"{path} is missing columns: {sorted(missing)}")
+        df = df.copy()
+        df["csv_path"] = str(path)
+        frames.append(df)
+
+    if not frames:
+        return pd.DataFrame(columns=["frame", "centroidX", "centroidY", "csv_path"])
+
+    out = pd.concat(frames, ignore_index=True)
+    for col in ("frame", "centroidX", "centroidY"):
+        out[col] = pd.to_numeric(out[col], errors="coerce")
+    out = out.dropna(subset=["frame", "centroidX", "centroidY"])
+    out["frame"] = out["frame"].astype(int)
+    return out.sort_values(["frame", "csv_path"]).reset_index(drop=True)
+
+
 def pivot_tracking(df: pd.DataFrame) -> pd.DataFrame:
     return (
         df.pivot_table(index="frame", columns="ID", values=["centroidX", "centroidY"])
@@ -387,10 +444,50 @@ def compute_activity_tables(
     )
 
 
-def compute_social_center_distance_table(tracking: pd.DataFrame) -> pd.DataFrame:
+def social_center_from_tracking_paths(paths: Iterable[Path]) -> tuple[float, float] | None:
+    result = mean_centroids_across_files(paths)
+    center_x = result["mean_centroidX"]
+    center_y = result["mean_centroidY"]
+    if not np.isfinite(center_x) or not np.isfinite(center_y):
+        return None
+    return float(center_x), float(center_y)
+
+
+def social_center_tracking_paths_for_sessions(
+    sessions: Iterable[ReviewSession],
+    target: tuple[int, str] | None,
+    pattern: str | None,
+) -> tuple[Path, ...]:
+    paths: list[Path] = []
+    for session in sessions:
+        if target is not None and session_colony_date(session) != target:
+            continue
+        if pattern is not None:
+            path = find_tracking_csv_by_pattern(session, pattern)
+            if path is None:
+                continue
+            paths.append(path)
+        elif session.tracking_paths:
+            paths.append(session.tracking_paths[0])
+
+    unique_paths: list[Path] = []
+    for path in paths:
+        resolved = path.expanduser().resolve()
+        if resolved not in unique_paths:
+            unique_paths.append(resolved)
+    return tuple(unique_paths)
+
+
+def compute_social_center_distance_table(
+    tracking: pd.DataFrame,
+    social_center: tuple[float, float] | None = None,
+) -> pd.DataFrame:
     pivot = pivot_tracking(tracking)
-    center_x = float(tracking["centroidX"].mean())
-    center_y = float(tracking["centroidY"].mean())
+    if social_center is None:
+        center_x = float(tracking["centroidX"].mean())
+        center_y = float(tracking["centroidY"].mean())
+    else:
+        center_x, center_y = social_center
     return np.sqrt((pivot["centroidX"] - center_x) ** 2 + (pivot["centroidY"] - center_y) ** 2)
 
 
@@ -431,6 +528,221 @@ def compute_interaction_count_table(tracking: pd.DataFrame, cutoff: float) -> pd
         out.loc[int(frame), ids] = np.sum(distances <= cutoff, axis=1)
 
     return out
+
+
+def is_nest_metric_label(label: str) -> bool:
+    clean = label.strip().lower()
+    return bool(clean) and not clean.startswith("arena perimeter") and "calibration" not in clean
+
+
+def nest_components_from_brood_map(brood_map: pd.DataFrame, *, metrics_only: bool = True) -> list[NestComponent]:
+    if brood_map.empty:
+        return []
+
+    components: list[NestComponent] = []
+    grouped = brood_map.groupby(["object index", "label", "shape"], dropna=False)
+    for (_, label, shape), rows in grouped:
+        label = "" if pd.isna(label) else str(label)
+        if metrics_only and not is_nest_metric_label(label):
+            continue
+        shape = "" if pd.isna(shape) else str(shape)
+        points = tuple((float(row.x), float(row.y)) for _, row in rows.iterrows())
+        if not points:
+            continue
+        radius = 0.0
+        if "radius" in rows.columns and not pd.isna(rows.iloc[0].radius):
+            radius = float(rows.iloc[0].radius)
+        components.append(NestComponent(label=label, shape=shape, points=points, radius=radius))
+    return components
+
+
+def _distance_to_segment(point: np.ndarray, a: np.ndarray, b: np.ndarray) -> tuple[float, np.ndarray]:
+    ab = b - a
+    denom = float(np.dot(ab, ab))
+    if denom == 0:
+        return float(np.linalg.norm(point - a)), a
+    t = float(np.clip(np.dot(point - a, ab) / denom, 0.0, 1.0))
+    nearest = a + t * ab
+    return float(np.linalg.norm(point - nearest)), nearest
+
+
+def _point_in_polygon(point: np.ndarray, vertices: np.ndarray) -> bool:
+    inside = False
+    x, y = point
+    j = len(vertices) - 1
+    for i in range(len(vertices)):
+        xi, yi = vertices[i]
+        xj, yj = vertices[j]
+        intersects = (yi > y) != (yj > y)
+        if intersects:
+            x_at_y = (xj - xi) * (y - yi) / (yj - yi) + xi
+            if x < x_at_y:
+                inside = not inside
+        j = i
+    return inside
+
+
+def _polyline_distance(point: np.ndarray, vertices: np.ndarray, *, closed: bool) -> tuple[float, np.ndarray]:
+    if len(vertices) == 1:
+        return float(np.linalg.norm(point - vertices[0])), vertices[0]
+
+    segments = list(zip(vertices[:-1], vertices[1:]))
+    if closed and len(vertices) > 2:
+        segments.append((vertices[-1], vertices[0]))
+
+    best_distance = float("inf")
+    best_point = vertices[0]
+    for a, b in segments:
+        distance, nearest = _distance_to_segment(point, a, b)
+        if distance < best_distance:
+            best_distance = distance
+            best_point = nearest
+    return best_distance, best_point
+
+
+def _rectangle_vertices(points: np.ndarray) -> np.ndarray:
+    p1, p2 = points[0], points[1]
+    min_x, max_x = sorted((p1[0], p2[0]))
+    min_y, max_y = sorted((p1[1], p2[1]))
+    return np.array(
+        [
+            [min_x, min_y],
+            [max_x, min_y],
+            [max_x, max_y],
+            [min_x, max_y],
+        ],
+        dtype=float,
+    )
+
+
+def distance_to_nest_component(point_xy: tuple[float, float], component: NestComponent) -> tuple[float, tuple[float, float]]:
+    point = np.array(point_xy, dtype=float)
+    points = np.array(component.points, dtype=float)
+    shape = component.shape.lower()
+
+    if shape == "circle":
+        center = points[0]
+        radius = max(0.0, float(component.radius))
+        delta = point - center
+        center_distance = float(np.linalg.norm(delta))
+        if center_distance <= radius:
+            return 0.0, (float(point[0]), float(point[1]))
+        if center_distance == 0:
+            nearest = center + np.array([radius, 0.0])
+        else:
+            nearest = center + delta / center_distance * radius
+        return float(center_distance - radius), (float(nearest[0]), float(nearest[1]))
+
+    if shape == "point":
+        distance = float(np.linalg.norm(point - points[0]))
+        return distance, (float(points[0][0]), float(points[0][1]))
+
+    if shape == "rectangle" and len(points) >= 2:
+        points = _rectangle_vertices(points)
+        shape = "polygon"
+
+    if shape == "polygon" and len(points) >= 3:
+        if _point_in_polygon(point, points):
+            return 0.0, (float(point[0]), float(point[1]))
+        distance, nearest = _polyline_distance(point, points, closed=True)
+        return distance, (float(nearest[0]), float(nearest[1]))
+
+    if len(points) >= 2:
+        distance, nearest = _polyline_distance(point, points, closed=False)
+        return distance, (float(nearest[0]), float(nearest[1]))
+
+    distance = float(np.linalg.norm(point - points[0]))
+    return distance, (float(points[0][0]), float(points[0][1]))
+
+
+def nearest_nest_component(
+    point_xy: tuple[float, float],
+    components: list[NestComponent],
+) -> tuple[float, tuple[float, float], NestComponent] | None:
+    best: tuple[float, tuple[float, float], NestComponent] | None = None
+    for component in components:
+        distance, nearest = distance_to_nest_component(point_xy, component)
+        if best is None or distance < best[0]:
+            best = (distance, nearest, component)
+    return best
+
+
+def compute_nest_component_tables(
+    tracking: pd.DataFrame,
+    brood_map: pd.DataFrame,
+    cutoff: float,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    components = nest_components_from_brood_map(brood_map)
+    if tracking.empty or not components:
+        return pd.DataFrame(), pd.DataFrame()
+
+    frames = sorted(int(frame) for frame in tracking["frame"].unique())
+    bee_ids = sorted(int(bee_id) for bee_id in tracking["ID"].unique())
+    distance = pd.DataFrame(np.nan, index=frames, columns=bee_ids, dtype=float)
+    interactions = pd.DataFrame(np.nan, index=frames, columns=bee_ids, dtype=float)
+
+    for row in tracking.itertuples(index=False):
+        point = (float(row.centroidX), float(row.centroidY))
+        distances = [distance_to_nest_component(point, component)[0] for component in components]
+        frame = int(row.frame)
+        bee_id = int(row.ID)
+        distance.loc[frame, bee_id] = min(distances)
+        interactions.loc[frame, bee_id] = sum(value <= cutoff for value in distances)
+
+    return distance, interactions
+
+
+def ethogram_state_table(
+    table: pd.DataFrame,
+    metric: str,
+    cutoff: float,
+    activity: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    if table.empty:
+        return pd.DataFrame()
+
+    if metric == "activity":
+        return table.copy()
+    if metric == "speed" and activity is not None and not activity.empty:
+        return activity.reindex(index=table.index, columns=table.columns)
+
+    if metric in {"interactions", "nest_interactions"}:
+        state = table > 0
+    elif metric in {"nearest_neighbor", "nest_distance"}:
+        state = table <= cutoff
+    elif metric == "speed":
+        state = table > cutoff
+    else:
+        state = table.notna()
+
+    return state.astype(float).where(~table.isna())
+
+
+def contiguous_value_ranges(series: pd.Series) -> list[tuple[int, int, int | None]]:
+    ranges: list[tuple[int, int, int | None]] = []
+    start = None
+    previous = None
+    previous_state: int | None = None
+
+    for frame, value in series.sort_index().items():
+        frame = int(frame)
+        state = None if pd.isna(value) else int(value)
+        starts_new_range = (
+            start is None
+            or previous is None
+            or frame > previous + 1
+            or state != previous_state
+        )
+        if starts_new_range:
+            if start is not None:
+                ranges.append((start, previous, previous_state))
+            start = frame
+            previous_state = state
+        previous = frame
+
+    if start is not None and previous is not None:
+        ranges.append((start, previous, previous_state))
+    return ranges
 
 
 def convert_speed_table_units(speed: pd.DataFrame, unit: str, frame_rate: float, px_per_cm: float) -> pd.DataFrame:
@@ -642,6 +954,7 @@ class TrackingCsvChoiceDialog(QDialog):
 
 class VideoLabel(QLabel):
     zoomChanged = Signal(float)
+    legendVisibilityChanged = Signal(bool)
 
     def __init__(self):
         super().__init__()
@@ -650,7 +963,7 @@ class VideoLabel(QLabel):
         self.setStyleSheet("background: #101418; color: #d8e2e7;")
         self.setText("Open a video or folder to begin review")
         self.setMouseTracking(True)
-        self.setToolTip("Scroll to zoom. Drag to pan. Double-click to reset.")
+        self.setToolTip("Scroll to zoom. Drag to pan. Double-click the key to hide it, or double-click elsewhere to reset zoom.")
 
         self._pixmap: QPixmap | None = None
         self._zoom = 1.0
@@ -659,6 +972,8 @@ class VideoLabel(QLabel):
         self._drag_start: QPointF | None = None
         self._drag_start_pan = QPointF(0.0, 0.0)
         self._legend_items: list[tuple[str, str, QColor]] = []
+        self._legend_visible = True
+        self._legend_rect = QRectF()
 
     @property
     def zoom_factor(self) -> float:
@@ -684,6 +999,19 @@ class VideoLabel(QLabel):
     def set_legend_items(self, items: list[tuple[str, str, QColor]]):
         self._legend_items = [(kind, label, QColor(color)) for kind, label, color in items]
         self.update()
+
+    def legend_visible(self) -> bool:
+        return self._legend_visible
+
+    def set_legend_visible(self, visible: bool):
+        if self._legend_visible == visible:
+            return
+        self._legend_visible = visible
+        self.legendVisibilityChanged.emit(visible)
+        self.update()
+
+    def toggle_legend(self):
+        self.set_legend_visible(not self._legend_visible)
 
     def reset_zoom(self):
         self._zoom = 1.0
@@ -822,6 +1150,10 @@ class VideoLabel(QLabel):
 
     def mouseDoubleClickEvent(self, event):
         if event.button() == Qt.LeftButton:
+            if self._legend_visible and self._legend_rect.contains(event.position()):
+                self.set_legend_visible(False)
+                event.accept()
+                return
             self.reset_zoom()
             event.accept()
             return
@@ -840,7 +1172,8 @@ class VideoLabel(QLabel):
         painter.end()
 
     def _draw_legend(self, painter: QPainter):
-        if not self._legend_items:
+        self._legend_rect = QRectF()
+        if not self._legend_visible or not self._legend_items:
             return
 
         painter.save()
@@ -865,6 +1198,7 @@ class VideoLabel(QLabel):
         x = self.width() - width - 12
         y = 12
         rect = QRectF(x, y, width, height)
+        self._legend_rect = rect
 
         painter.setPen(QPen(QColor(236, 241, 245, 150), 1))
         painter.setBrush(QColor(16, 20, 24, 222))
@@ -887,6 +1221,17 @@ class VideoLabel(QLabel):
             elif kind == "ring":
                 painter.setBrush(Qt.NoBrush)
                 painter.drawEllipse(QPointF(swatch_x + 6, center_y), 7, 7)
+            elif kind == "diamond":
+                painter.drawPolygon(
+                    QPolygonF(
+                        [
+                            QPointF(swatch_x + 7, center_y - 7),
+                            QPointF(swatch_x + 14, center_y),
+                            QPointF(swatch_x + 7, center_y + 7),
+                            QPointF(swatch_x, center_y),
+                        ]
+                    )
+                )
             elif kind == "cross":
                 painter.drawLine(QPointF(swatch_x, center_y), QPointF(swatch_x + 14, center_y))
                 painter.drawLine(QPointF(swatch_x + 7, center_y - 7), QPointF(swatch_x + 7, center_y + 7))
@@ -914,21 +1259,30 @@ class ReviewHub(QMainWindow):
         self.capture: cv2.VideoCapture | None = None
         self.current_frame = 0
         self.frame_count = 0
+        self.video_frame_count_known = False
         self.video_fps = frame_per_sec
+        self._capture_next_frame: int | None = None
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.next_frame)
 
         self.tracking = pd.DataFrame()
         self.rows_by_frame: dict[int, pd.DataFrame] = {}
+        self.noid_tags = pd.DataFrame()
+        self.noid_rows_by_frame: dict[int, pd.DataFrame] = {}
+        self.noid_tag_paths: tuple[Path, ...] = ()
+        self.noid_status_message = "No noID CSV loaded"
         self.activity = pd.DataFrame()
         self.speed = pd.DataFrame()
         self.social_center_distance = pd.DataFrame()
         self.nearest_neighbor_distance = pd.DataFrame()
         self.interaction_count = pd.DataFrame()
+        self.nest_component_distance = pd.DataFrame()
+        self.nest_component_interaction_count = pd.DataFrame()
         self.plot_series_by_bee: dict[int, pd.Series] = {}
         self.heatmap_bees: list[int] = []
         self.bee_ids: list[int] = []
         self.social_center: tuple[float, float] | None = None
+        self.social_center_file_count = 0
         self.active_tracking_path: Path | None = None
         self.tracking_status_message = "No tracking loaded"
         self.tracking_csv_preference: str | None = None
@@ -939,6 +1293,7 @@ class ReviewHub(QMainWindow):
         self.labeling_image_path: Path | None = None
         self.labeling_csv_target: Path | None = None
         self._last_frame_bgr = None
+        self._last_frame_index: int | None = None
 
         self._build_ui()
         if source is None:
@@ -961,10 +1316,11 @@ class ReviewHub(QMainWindow):
 
         left = QWidget()
         left_layout = QVBoxLayout(left)
-        left_layout.addWidget(QLabel("Sessions"))
+        self.sessions_group = make_collapsible_group("Sessions")
+        sessions_layout = QVBoxLayout(self.sessions_group)
         self.session_list = QListWidget()
         self.session_list.currentRowChanged.connect(self.load_session_at)
-        left_layout.addWidget(self.session_list)
+        sessions_layout.addWidget(self.session_list)
         nav_row = QHBoxLayout()
         prev_video = QPushButton("Previous")
         next_video = QPushButton("Next")
@@ -972,7 +1328,8 @@ class ReviewHub(QMainWindow):
         next_video.clicked.connect(self.next_session)
         nav_row.addWidget(prev_video)
         nav_row.addWidget(next_video)
-        left_layout.addLayout(nav_row)
+        sessions_layout.addLayout(nav_row)
+        left_layout.addWidget(self.sessions_group, stretch=1)
         splitter.addWidget(left)
 
         center = QWidget()
@@ -994,6 +1351,7 @@ class ReviewHub(QMainWindow):
         zoom_out = QPushButton("Zoom -")
         zoom_in = QPushButton("Zoom +")
         reset_zoom = QPushButton("Reset zoom")
+        self.legend_button = QPushButton()
         self.zoom_label = QLabel("Zoom 100%")
         zoom_out.setToolTip("Zoom out")
         zoom_in.setToolTip("Zoom in")
@@ -1001,7 +1359,10 @@ class ReviewHub(QMainWindow):
         zoom_out.clicked.connect(self.video_label.zoom_out)
         zoom_in.clicked.connect(self.video_label.zoom_in)
         reset_zoom.clicked.connect(self.video_label.reset_zoom)
+        self.legend_button.clicked.connect(self.video_label.toggle_legend)
         self.video_label.zoomChanged.connect(self.update_zoom_label)
+        self.video_label.legendVisibilityChanged.connect(self.update_legend_button)
+        self.update_legend_button(self.video_label.legend_visible())
         controls.addWidget(self.play_button)
         controls.addWidget(prev_frame)
         controls.addWidget(next_frame)
@@ -1010,6 +1371,7 @@ class ReviewHub(QMainWindow):
         controls.addWidget(zoom_in)
         controls.addWidget(reset_zoom)
         controls.addWidget(self.zoom_label)
+        controls.addWidget(self.legend_button)
         controls.addStretch()
         center_layout.addLayout(controls)
         splitter.addWidget(center)
@@ -1031,26 +1393,36 @@ class ReviewHub(QMainWindow):
 
     def _make_layer_group(self) -> QWidget:
         box = make_collapsible_group("Metric Layers")
-        layout = QVBoxLayout(box)
+        layout = QGridLayout(box)
+        layout.setHorizontalSpacing(8)
+        layout.setVerticalSpacing(2)
         self.show_tracks = QCheckBox("Tracking points")
         self.show_activity = QCheckBox("Activity state")
+        self.show_noid_tags = QCheckBox("noID tags")
         self.show_speed_labels = QCheckBox("Speed labels")
         self.show_interactions = QCheckBox("Interactions")
+        self.show_nest_interactions = QCheckBox("Nest interactions")
+        self.show_nest_distances = QCheckBox("Nest distances")
         self.show_social_center = QCheckBox("Social center")
         self.show_trails = QCheckBox("Trails")
         self.show_nest_map = QCheckBox("Nest map")
-        for checkbox, checked in [
+        layer_options = [
             (self.show_tracks, True),
             (self.show_activity, True),
+            (self.show_noid_tags, False),
             (self.show_speed_labels, False),
             (self.show_interactions, False),
+            (self.show_nest_interactions, False),
+            (self.show_nest_distances, False),
             (self.show_social_center, False),
             (self.show_trails, False),
             (self.show_nest_map, True),
-        ]:
+        ]
+        for index, (checkbox, checked) in enumerate(layer_options):
             checkbox.setChecked(checked)
             checkbox.stateChanged.connect(self.render_current_frame)
-            layout.addWidget(checkbox)
+            layout.addWidget(checkbox, index // 2, index % 2)
+        self.update_noid_layer_availability()
         return box
 
     def _make_params_group(self) -> QWidget:
@@ -1137,29 +1509,53 @@ class ReviewHub(QMainWindow):
         self.expand_plot_btn.setCheckable(True)
         self.expand_plot_btn.setToolTip("Collapse the upper right-panel sections so the plot has more room")
         self.expand_plot_btn.toggled.connect(self.set_plot_expanded)
-        layout.addWidget(self.expand_plot_btn)
+        self.restore_plot_btn = QPushButton("Restore plot defaults")
+        self.restore_plot_btn.setToolTip("Reset plot metric, units, mode, focus bee, and frame range")
+        self.restore_plot_btn.clicked.connect(self.restore_plot_defaults)
+        plot_button_row = QHBoxLayout()
+        plot_button_row.addWidget(self.expand_plot_btn)
+        plot_button_row.addWidget(self.restore_plot_btn)
+        layout.addLayout(plot_button_row)
 
-        plot_controls = QFormLayout()
+        plot_controls = QGridLayout()
+        plot_controls.setContentsMargins(0, 0, 0, 0)
+        plot_controls.setHorizontalSpacing(6)
+        plot_controls.setVerticalSpacing(2)
         self.plot_metric = QComboBox()
         self.plot_metric.addItem("Speed", "speed")
-        self.plot_metric.addItem("Activity state", "activity")
-        self.plot_metric.addItem("Distance to social center", "dist_sc")
-        self.plot_metric.addItem("Nearest neighbor distance", "nearest_neighbor")
-        self.plot_metric.addItem("Interaction count", "interactions")
+        self.plot_metric.addItem("Activity", "activity")
+        self.plot_metric.addItem("Social center", "dist_sc")
+        self.plot_metric.addItem("Nearest neighbor", "nearest_neighbor")
+        self.plot_metric.addItem("Interactions", "interactions")
+        self.plot_metric.addItem("Nest distance", "nest_distance")
+        self.plot_metric.addItem("Nest interactions", "nest_interactions")
         self.plot_metric.currentIndexChanged.connect(self.update_focus_plot)
+        self.plot_metric.setMinimumContentsLength(13)
 
         self.speed_units = QComboBox()
         self.speed_units.addItems(["px/frame", "px/sec", "cm/sec"])
         self.speed_units.currentIndexChanged.connect(self.update_focus_plot)
+        self.speed_units.setMinimumContentsLength(8)
 
         self.plot_mode = QComboBox()
         self.plot_mode.addItem("Lines", "lines")
         self.plot_mode.addItem("Heatmap", "heatmap")
+        self.plot_mode.addItem("Ethogram", "ethogram")
         self.plot_mode.currentIndexChanged.connect(self.update_focus_plot)
+        self.plot_mode.setMinimumContentsLength(8)
 
-        plot_controls.addRow("Plot metric", self.plot_metric)
-        plot_controls.addRow("Speed units", self.speed_units)
-        plot_controls.addRow("Plot mode", self.plot_mode)
+        for combo in (self.plot_metric, self.speed_units, self.plot_mode):
+            combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+
+        plot_controls.addWidget(QLabel("Metric"), 0, 0)
+        plot_controls.addWidget(QLabel("Units"), 0, 1)
+        plot_controls.addWidget(QLabel("Mode"), 0, 2)
+        plot_controls.addWidget(self.plot_metric, 1, 0)
+        plot_controls.addWidget(self.speed_units, 1, 1)
+        plot_controls.addWidget(self.plot_mode, 1, 2)
+        plot_controls.setColumnStretch(0, 2)
+        plot_controls.setColumnStretch(1, 1)
+        plot_controls.setColumnStretch(2, 1)
         layout.addLayout(plot_controls)
 
         self.speed_plot = pg.PlotWidget()
@@ -1169,12 +1565,16 @@ class ReviewHub(QMainWindow):
         bottom_axis.setHeight(38)
         bottom_axis.setPen(pg.mkPen("#d8e2e7"))
         bottom_axis.setTextPen(pg.mkPen("#d8e2e7"))
+        tick_font = QFont()
+        tick_font.setPixelSize(12)
         bottom_axis.setStyle(
             showValues=True,
             tickTextHeight=22,
             tickTextOffset=8,
             autoExpandTextSpace=True,
+            tickFont=tick_font,
         )
+        self.speed_plot.showGrid(x=True, y=True, alpha=0.2)
         self.speed_plot.setLabel("left", "Speed", units="px/frame")
         self.speed_plot.setLabel("bottom", "Frame (CSV)")
         self.frame_marker = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen("#e6c229", width=1))
@@ -1268,14 +1668,44 @@ class ReviewHub(QMainWindow):
             QMessageBox.critical(self, "Video error", f"Could not open {session.video_path}")
             return
 
-        self.frame_count = int(self.capture.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
+        reported_frame_count = int(self.capture.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
+        self.video_frame_count_known = reported_frame_count > 1
+        self.frame_count = reported_frame_count if self.video_frame_count_known else 0
         self.video_fps = float(self.capture.get(cv2.CAP_PROP_FPS)) or frame_per_sec
         self.current_frame = 0
+        self._capture_next_frame = 0
+        self._last_frame_bgr = None
+        self._last_frame_index = None
         self.timeline.setRange(0, max(0, self.frame_count - 1))
         self.video_label.reset_zoom()
+        self.load_noid_tags_for_session(session)
         self.populate_tracking_sources(session)
         self.apply_tracking_csv_choice(session)
         self.load_selected_tracking(show_warning=True)
+
+    def data_max_frame(self) -> int:
+        max_frame = -1
+        if not self.tracking.empty and "frame" in self.tracking.columns:
+            max_frame = max(max_frame, int(self.tracking["frame"].max()))
+        if not self.noid_tags.empty and "frame" in self.noid_tags.columns:
+            max_frame = max(max_frame, int(self.noid_tags["frame"].max()))
+        return max_frame
+
+    def update_effective_frame_range(self):
+        data_max = self.data_max_frame()
+        session = self.current_session()
+        is_mjpeg = session is not None and session.video_path.suffix.lower() == ".mjpeg"
+        should_use_data_range = data_max >= 0 and (
+            not self.video_frame_count_known
+            or (is_mjpeg and data_max + 1 > self.frame_count)
+        )
+        if should_use_data_range:
+            self.frame_count = data_max + 1
+        elif not self.video_frame_count_known:
+            self.frame_count = 0
+        if self.frame_count:
+            self.current_frame = min(self.current_frame, self.frame_count - 1)
+        self.timeline.setRange(0, max(0, self.frame_count - 1))
 
     def populate_tracking_sources(self, session: ReviewSession):
         self.tracking_source.blockSignals(True)
@@ -1380,17 +1810,62 @@ class ReviewHub(QMainWindow):
         self.social_center_distance = pd.DataFrame()
         self.nearest_neighbor_distance = pd.DataFrame()
         self.interaction_count = pd.DataFrame()
+        self.nest_component_distance = pd.DataFrame()
+        self.nest_component_interaction_count = pd.DataFrame()
         self.plot_series_by_bee = {}
         self.heatmap_bees = []
         self.bee_ids = []
         self.social_center = None
+        self.social_center_file_count = 0
         self.active_tracking_path = None
         self.tracking_status_message = message
         self.focus_bee.blockSignals(True)
         self.focus_bee.clear()
         self.focus_bee.addItem("All bees", None)
         self.focus_bee.blockSignals(False)
-        self.video_label.set_legend_items([])
+        self.update_effective_frame_range()
+        self.video_label.set_legend_items(self.current_legend_items())
+
+    def update_noid_layer_availability(self):
+        if not hasattr(self, "show_noid_tags"):
+            return
+        available = not self.noid_tags.empty
+        self.show_noid_tags.setEnabled(available)
+        if available:
+            names = ", ".join(path.name for path in self.noid_tag_paths[:2])
+            if len(self.noid_tag_paths) > 2:
+                names += f", +{len(self.noid_tag_paths) - 2} more"
+            self.show_noid_tags.setToolTip(f"Show noID detections from {names}")
+        else:
+            self.show_noid_tags.setToolTip(self.noid_status_message)
+
+    def clear_noid_tags(self, message: str = "No noID CSV found"):
+        self.noid_tags = pd.DataFrame(columns=["frame", "centroidX", "centroidY", "csv_path"])
+        self.noid_rows_by_frame = {}
+        self.noid_tag_paths = ()
+        self.noid_status_message = message
+        self.update_noid_layer_availability()
+
+    def load_noid_tags_for_session(self, session: ReviewSession):
+        paths = find_noid_tag_csvs(session)
+        if not paths:
+            self.clear_noid_tags("No noID CSV found for this video")
+            return
+        try:
+            self.noid_tags = load_noid_tags(paths)
+        except Exception as exc:
+            self.clear_noid_tags(f"Could not load noID CSV:\n{exc}")
+            return
+
+        self.noid_tag_paths = paths
+        if self.noid_tags.empty:
+            self.noid_rows_by_frame = {}
+            self.noid_status_message = "noID CSV loaded, but it has no usable rows"
+        else:
+            self.noid_rows_by_frame = {int(frame): rows for frame, rows in self.noid_tags.groupby("frame")}
+            self.noid_status_message = f"noID tags: {', '.join(path.name for path in paths)}"
+        self.update_noid_layer_availability()
+        self.update_effective_frame_range()
 
     def load_selected_tracking(self, show_warning: bool = False):
         path = self.selected_tracking_path()
@@ -1413,10 +1888,7 @@ class ReviewHub(QMainWindow):
         self.tracking_status_message = f"Tracking: {path.name}"
         self.rows_by_frame = {int(frame): rows for frame, rows in self.tracking.groupby("frame")}
         self.bee_ids = sorted(int(x) for x in self.tracking["ID"].unique())
-        self.social_center = (
-            float(self.tracking["centroidX"].mean()),
-            float(self.tracking["centroidY"].mean()),
-        )
+        self.update_effective_frame_range()
         self.focus_bee.blockSignals(True)
         self.focus_bee.clear()
         self.focus_bee.addItem("All bees", None)
@@ -1449,6 +1921,8 @@ class ReviewHub(QMainWindow):
         self.nest_status = assess_nest_map_status(session)
         self.load_brood_map()
         self.update_nest_controls()
+        if not self.tracking.empty:
+            self.update_focus_plot()
         self.render_current_frame()
 
     def update_nest_controls(self):
@@ -1477,6 +1951,8 @@ class ReviewHub(QMainWindow):
         status = self.nest_status
         if status is None or status.csv_path is None or not status.csv_path.exists():
             self.brood_map = pd.DataFrame()
+            self.nest_component_distance = pd.DataFrame()
+            self.nest_component_interaction_count = pd.DataFrame()
             return
         try:
             brood = pd.read_csv(status.csv_path)
@@ -1486,8 +1962,11 @@ class ReviewHub(QMainWindow):
             for col in ("object index", "x", "y", "radius"):
                 brood[col] = pd.to_numeric(brood[col], errors="coerce")
             self.brood_map = brood.dropna(subset=["object index", "x", "y"])
+            self.recompute_nest_component_metrics()
         except Exception as exc:
             self.brood_map = pd.DataFrame()
+            self.nest_component_distance = pd.DataFrame()
+            self.nest_component_interaction_count = pd.DataFrame()
             QMessageBox.warning(self, "Brood map error", f"Could not read brood map:\n{exc}")
 
     def _choose_nest_image(self) -> Path | None:
@@ -1606,6 +2085,54 @@ class ReviewHub(QMainWindow):
             QMessageBox.warning(self, "CSV generation failed", f"Could not generate brood CSV:\n{exc}")
         self.refresh_nest_status()
 
+    def recompute_nest_component_metrics(self):
+        self.nest_component_distance, self.nest_component_interaction_count = compute_nest_component_tables(
+            self.tracking,
+            self.brood_map,
+            cutoff=self.interaction_cutoff.value(),
+        )
+
+    def current_tracking_pattern(self) -> str | None:
+        if self.tracking_csv_preference is not None:
+            return self.tracking_csv_preference
+        session = self.current_session()
+        path = self.selected_tracking_path()
+        if session is not None and path in session.tracking_paths:
+            return tracking_csv_pattern(session.video_path, path)
+        return None
+
+    def social_center_tracking_paths(self) -> tuple[Path, ...]:
+        session = self.current_session()
+        path = self.selected_tracking_path()
+        if session is None:
+            return (path.expanduser().resolve(),) if path is not None else ()
+
+        target = session_colony_date(session)
+        if target is None:
+            return (path.expanduser().resolve(),) if path is not None else ()
+
+        paths = social_center_tracking_paths_for_sessions(
+            self.sessions,
+            target,
+            self.current_tracking_pattern(),
+        )
+        if paths:
+            return paths
+        return (path.expanduser().resolve(),) if path is not None else ()
+
+    def update_social_center(self):
+        paths = self.social_center_tracking_paths()
+        center = social_center_from_tracking_paths(paths)
+        if center is None and not self.tracking.empty:
+            center = (
+                float(self.tracking["centroidX"].mean()),
+                float(self.tracking["centroidY"].mean()),
+            )
+            self.social_center_file_count = 1
+        else:
+            self.social_center_file_count = len(paths)
+        self.social_center = center
+
     def recompute_metrics(self):
         if self.tracking.empty:
             self.activity = pd.DataFrame()
@@ -1613,19 +2140,28 @@ class ReviewHub(QMainWindow):
             self.social_center_distance = pd.DataFrame()
             self.nearest_neighbor_distance = pd.DataFrame()
             self.interaction_count = pd.DataFrame()
+            self.nest_component_distance = pd.DataFrame()
+            self.nest_component_interaction_count = pd.DataFrame()
+            self.social_center = None
+            self.social_center_file_count = 0
             return
+        self.update_social_center()
         self.activity, self.speed = compute_activity_tables(
             self.tracking,
             frame_rate=self.behavior_fps.value(),
             max_gap_seconds=self.max_gap.value(),
             speed_cutoff=self.speed_cutoff.value(),
         )
-        self.social_center_distance = compute_social_center_distance_table(self.tracking)
+        self.social_center_distance = compute_social_center_distance_table(
+            self.tracking,
+            self.social_center,
+        )
         self.nearest_neighbor_distance = compute_nearest_neighbor_distance_table(self.tracking)
         self.interaction_count = compute_interaction_count_table(
             self.tracking,
             cutoff=self.interaction_cutoff.value(),
         )
+        self.recompute_nest_component_metrics()
         self.update_focus_plot()
         self.render_current_frame()
 
@@ -1661,20 +2197,35 @@ class ReviewHub(QMainWindow):
         if self.frame_count and self.current_frame >= self.frame_count - 1:
             self.stop_playback()
             return
-        self.seek_frame(self.current_frame + 1)
+        if not self.seek_frame(self.current_frame + 1):
+            self.stop_playback()
 
-    def seek_frame(self, frame: int):
-        self.current_frame = int(frame)
-        self.render_current_frame()
+    def seek_frame(self, frame: int) -> bool:
+        target = max(0, int(frame))
+        if self.frame_count:
+            target = min(target, self.frame_count - 1)
+        previous_frame = self.current_frame
+        self.current_frame = target
+        if not self.render_current_frame():
+            self.current_frame = previous_frame
+            return False
+        return True
 
     def update_zoom_label(self, zoom: float):
         self.zoom_label.setText(f"Zoom {zoom * 100:.0f}%")
 
-    def current_legend_items(self) -> list[tuple[str, str, QColor]]:
-        if self.tracking.empty:
-            return []
+    def update_legend_button(self, visible: bool):
+        self.legend_button.setText("Hide key" if visible else "Show key")
+        self.legend_button.setToolTip("Hide the video overlay key" if visible else "Show the video overlay key")
 
+    def current_legend_items(self) -> list[tuple[str, str, QColor]]:
         items: list[tuple[str, str, QColor]] = []
+        if self.show_noid_tags.isChecked() and not self.noid_tags.empty:
+            items.append(("diamond", "noID tag", NOID_TAG_COLOR))
+
+        if self.tracking.empty:
+            return items
+
         if self.show_activity.isChecked():
             items.extend(
                 [
@@ -1692,6 +2243,12 @@ class ReviewHub(QMainWindow):
 
         if self.show_interactions.isChecked():
             items.append(("line", "Interaction", QColor(82, 180, 255, 180)))
+
+        if self.show_nest_interactions.isChecked() and not self.brood_map.empty:
+            items.append(("dot", "Nest interaction", QColor(247, 168, 49, 190)))
+
+        if self.show_nest_distances.isChecked() and not self.brood_map.empty:
+            items.append(("line", "Nest distance", QColor(220, 220, 255, 210)))
 
         if self.show_social_center.isChecked():
             items.append(("cross", "Social center", QColor("#ff5c8a")))
@@ -1715,14 +2272,58 @@ class ReviewHub(QMainWindow):
 
         return items
 
-    def render_current_frame(self):
-        if self.capture is None:
-            return
+    def reopen_capture(self) -> bool:
+        session = self.current_session()
+        if session is None:
+            return False
+        if self.capture is not None:
+            self.capture.release()
+        self.capture = cv2.VideoCapture(str(session.video_path))
+        self._capture_next_frame = 0
+        return self.capture.isOpened()
 
-        self.capture.set(cv2.CAP_PROP_POS_FRAMES, self.current_frame)
-        ok, frame = self.capture.read()
+    def read_frame_by_reopening(self, frame_index: int):
+        if not self.reopen_capture():
+            return None
+        frame = None
+        for _ in range(frame_index + 1):
+            ok, frame = self.capture.read()
+            if not ok:
+                self._capture_next_frame = None
+                return None
+        return frame
+
+    def read_video_frame(self, frame_index: int):
+        if self._last_frame_index == frame_index and self._last_frame_bgr is not None:
+            return self._last_frame_bgr.copy() if hasattr(self._last_frame_bgr, "copy") else self._last_frame_bgr
+        if self.capture is None:
+            return None
+
+        frame = None
+        ok = False
+        if self._capture_next_frame == frame_index:
+            ok, frame = self.capture.read()
+        else:
+            if self.capture.set(cv2.CAP_PROP_POS_FRAMES, frame_index):
+                ok, frame = self.capture.read()
+            if not ok:
+                frame = self.read_frame_by_reopening(frame_index)
+                ok = frame is not None
+
         if not ok:
-            return
+            return None
+        self._last_frame_bgr = frame
+        self._last_frame_index = frame_index
+        self._capture_next_frame = frame_index + 1
+        return frame
+
+    def render_current_frame(self) -> bool:
+        if self.capture is None:
+            return False
+
+        frame = self.read_video_frame(self.current_frame)
+        if frame is None:
+            return False
         self._last_frame_bgr = frame
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         h, w, ch = rgb.shape
@@ -1736,9 +2337,11 @@ class ReviewHub(QMainWindow):
         self.timeline.blockSignals(False)
         self.frame_label.setText(f"Frame {self.current_frame} / {max(0, self.frame_count - 1)}")
         self.frame_marker.setValue(self.current_frame)
+        return True
 
     def draw_overlays(self, pixmap: QPixmap, width: int, height: int) -> QPixmap:
         rows = self.rows_by_frame.get(self.current_frame)
+        noid_rows = self.noid_rows_by_frame.get(self.current_frame)
         painter = QPainter(pixmap)
         painter.setRenderHint(QPainter.Antialiasing)
         selected = self.selected_bee()
@@ -1748,6 +2351,15 @@ class ReviewHub(QMainWindow):
 
         if self.show_nest_map.isChecked() and not self.brood_map.empty:
             self.draw_brood_map(painter)
+
+        if self.show_noid_tags.isChecked() and noid_rows is not None:
+            self.draw_noid_tags(painter, noid_rows)
+
+        if rows is not None and not self.brood_map.empty:
+            if self.show_nest_distances.isChecked():
+                self.draw_nest_component_links(painter, rows, selected, interactions_only=False)
+            if self.show_nest_interactions.isChecked():
+                self.draw_active_nest_components(painter, rows, selected)
 
         if self.show_interactions.isChecked() and rows is not None:
             self.draw_interactions(painter, rows, selected)
@@ -1770,14 +2382,25 @@ class ReviewHub(QMainWindow):
 
         painter.end()
         total = sum(stats.values())
+        noid_count_text = ""
+        if not self.noid_tags.empty:
+            noid_count = 0 if noid_rows is None else len(noid_rows)
+            noid_count_text = f"\nnoID detections: {noid_count}"
         if self.tracking.empty:
-            text = f"Frame {self.current_frame}\n{self.tracking_status_message}"
+            text = f"Frame {self.current_frame}\n{self.tracking_status_message}{noid_count_text}"
         else:
+            social_center_text = (
+                f"\nSocial center files: {self.social_center_file_count}"
+                if self.social_center is not None and self.social_center_file_count
+                else ""
+            )
             text = (
                 f"Frame {self.current_frame}\n"
                 f"{self.tracking_status_message}\n"
                 f"Detections: {total}\n"
                 f"Active: {stats['active']}  Inactive: {stats['inactive']}  Unknown: {stats['unknown']}"
+                f"{social_center_text}"
+                f"{noid_count_text}"
             )
         self.stats_label.setText(text)
         return pixmap
@@ -1854,6 +2477,40 @@ class ReviewHub(QMainWindow):
 
         painter.restore()
 
+    def draw_noid_tags(self, painter: QPainter, rows: pd.DataFrame):
+        marker_radius = 28
+        pen_width = 5
+        fill = QColor(NOID_TAG_COLOR)
+        fill.setAlpha(95)
+        outline = QColor(NOID_TAG_COLOR)
+        outline.setAlpha(230)
+
+        painter.save()
+        font = painter.font()
+        font.setPixelSize(30)
+        font.setBold(True)
+        painter.setFont(font)
+        for _, row in rows.iterrows():
+            x, y = float(row.centroidX), float(row.centroidY)
+            diamond = QPolygonF(
+                [
+                    QPointF(x, y - marker_radius),
+                    QPointF(x + marker_radius, y),
+                    QPointF(x, y + marker_radius),
+                    QPointF(x - marker_radius, y),
+                ]
+            )
+            painter.setPen(QPen(outline, pen_width))
+            painter.setBrush(QBrush(fill))
+            painter.drawPolygon(diamond)
+            painter.setPen(QPen(QColor("#f6f8fb"), 2))
+            painter.drawText(
+                QRect(int(x - marker_radius), int(y - marker_radius), marker_radius * 2, marker_radius * 2),
+                Qt.AlignCenter,
+                "?",
+            )
+        painter.restore()
+
     def draw_interactions(self, painter: QPainter, rows: pd.DataFrame, selected):
         cutoff = self.interaction_cutoff.value()
         values = rows[["ID", "centroidX", "centroidY"]].to_numpy()
@@ -1893,57 +2550,124 @@ class ReviewHub(QMainWindow):
             if len(rows) < 2:
                 continue
             color = stable_color(int(bee_id))
-            color.setAlpha(130)
-            painter.setPen(QPen(color, 2))
+            color.setAlpha(170)
+            painter.setPen(QPen(color, TRAIL_LINE_WIDTH))
             points = [QPointF(float(r.centroidX), float(r.centroidY)) for _, r in rows.iterrows()]
             for a, b in zip(points[:-1], points[1:]):
                 painter.drawLine(a, b)
 
-    def draw_brood_map(self, painter: QPainter):
-        grouped = self.brood_map.groupby(["object index", "label", "shape"], dropna=False)
-        for (_, label, shape), rows in grouped:
-            label = "" if pd.isna(label) else str(label)
-            shape = "" if pd.isna(shape) else str(shape)
-            bgr = LABEL_COLORS_BGR.get(label, (255, 0, 255))
-            color = QColor(bgr[2], bgr[1], bgr[0], 185)
-            painter.setPen(QPen(color, 3))
-            painter.setBrush(Qt.NoBrush)
+    def draw_nest_component_links(self, painter: QPainter, rows: pd.DataFrame, selected, *, interactions_only: bool):
+        components = nest_components_from_brood_map(self.brood_map)
+        if not components:
+            return
 
-            points = [QPointF(float(row.x), float(row.y)) for _, row in rows.iterrows()]
-            if not points:
+        color = QColor(220, 220, 255, 210)
+        width = NEST_DISTANCE_LINE_WIDTH
+        painter.setPen(QPen(color, width))
+        painter.setBrush(Qt.NoBrush)
+
+        for _, row in rows.iterrows():
+            bee_id = int(row.ID)
+            if selected is not None and bee_id != selected:
                 continue
+            point = (float(row.centroidX), float(row.centroidY))
+            nearest = nearest_nest_component(point, components)
+            if nearest is None:
+                continue
+            distance, nearest_point, _component = nearest
 
-            if shape == "circle":
-                row = rows.iloc[0]
-                radius = float(row.radius) if not pd.isna(row.radius) else 0.0
-                painter.drawEllipse(points[0], radius, radius)
-            elif shape == "point":
-                painter.setBrush(color)
-                painter.drawEllipse(points[0], 6, 6)
-                painter.setBrush(Qt.NoBrush)
-            elif shape == "polygon" and len(points) >= 3:
-                painter.drawPolygon(QPolygonF(points))
-            elif shape == "line" and len(points) >= 2:
-                for a, b in zip(points[:-1], points[1:]):
-                    painter.drawLine(a, b)
-            elif shape == "rectangle" and len(points) >= 2:
-                p1, p2 = points[0], points[1]
-                rect = QRect(
-                    int(min(p1.x(), p2.x())),
-                    int(min(p1.y(), p2.y())),
-                    int(abs(p2.x() - p1.x())),
-                    int(abs(p2.y() - p1.y())),
-                )
-                painter.drawRect(rect)
+            start = QPointF(point[0], point[1])
+            end = QPointF(nearest_point[0], nearest_point[1])
+            if distance == 0:
+                painter.drawEllipse(start, 14, 14)
+            else:
+                painter.drawLine(start, end)
 
-            painter.setPen(QPen(QColor(255, 255, 255, 190), 1))
-            painter.drawText(QRect(int(points[0].x() + 6), int(points[0].y() + 6), 220, 20), Qt.AlignLeft, label)
+    def draw_active_nest_components(self, painter: QPainter, rows: pd.DataFrame, selected):
+        components = nest_components_from_brood_map(self.brood_map)
+        if not components:
+            return
+
+        cutoff = self.interaction_cutoff.value()
+        active_components: list[NestComponent] = []
+        for _, row in rows.iterrows():
+            bee_id = int(row.ID)
+            if selected is not None and bee_id != selected:
+                continue
+            point = (float(row.centroidX), float(row.centroidY))
+            for component in components:
+                distance, _nearest = distance_to_nest_component(point, component)
+                if distance <= cutoff and component not in active_components:
+                    active_components.append(component)
+
+        for component in active_components:
+            self.draw_nest_component_shape(
+                painter,
+                component,
+                fill_alpha=NEST_INTERACTION_HIGHLIGHT_ALPHA,
+                line_width=NEST_INTERACTION_LINE_WIDTH,
+            )
+
+    def draw_nest_component_shape(
+        self,
+        painter: QPainter,
+        component: NestComponent,
+        *,
+        fill_alpha: int = 0,
+        line_width: int = NEST_MAP_LINE_WIDTH,
+    ):
+        bgr = LABEL_COLORS_BGR.get(component.label, (255, 0, 255))
+        line_color = QColor(bgr[2], bgr[1], bgr[0], 230)
+        fill_color = QColor(bgr[2], bgr[1], bgr[0], fill_alpha)
+        points = [QPointF(x, y) for x, y in component.points]
+        if not points:
+            return
+
+        painter.save()
+        painter.setPen(QPen(line_color, line_width))
+        painter.setBrush(QBrush(fill_color) if fill_alpha else Qt.NoBrush)
+
+        shape = component.shape.lower()
+        if shape == "circle":
+            painter.drawEllipse(points[0], component.radius, component.radius)
+        elif shape == "point":
+            painter.setBrush(QBrush(fill_color if fill_alpha else line_color))
+            painter.drawEllipse(points[0], max(6, line_width * 2), max(6, line_width * 2))
+        elif shape == "polygon" and len(points) >= 3:
+            painter.drawPolygon(QPolygonF(points))
+        elif shape == "rectangle" and len(points) >= 2:
+            p1, p2 = points[0], points[1]
+            rect = QRect(
+                int(min(p1.x(), p2.x())),
+                int(min(p1.y(), p2.y())),
+                int(abs(p2.x() - p1.x())),
+                int(abs(p2.y() - p1.y())),
+            )
+            painter.drawRect(rect)
+        elif len(points) >= 2:
+            for a, b in zip(points[:-1], points[1:]):
+                painter.drawLine(a, b)
+
+        painter.restore()
+
+    def draw_brood_map(self, painter: QPainter):
+        for component in nest_components_from_brood_map(self.brood_map, metrics_only=False):
+            self.draw_nest_component_shape(painter, component)
 
     def select_focus_bee(self, bee_id: int | None):
         for index in range(self.focus_bee.count()):
             if self.focus_bee.itemData(index) == bee_id:
                 self.focus_bee.setCurrentIndex(index)
                 return
+
+    def restore_plot_defaults(self):
+        for combo in (self.plot_metric, self.speed_units, self.plot_mode):
+            combo.blockSignals(True)
+            combo.setCurrentIndex(0)
+            combo.blockSignals(False)
+        self.select_focus_bee(None)
+        self.update_focus_plot()
+        self.render_current_frame()
 
     def current_plot_mode(self) -> str:
         return self.plot_mode.currentData() or "lines"
@@ -1961,6 +2685,10 @@ class ReviewHub(QMainWindow):
             return self.nearest_neighbor_distance, "Nearest neighbor distance", "px"
         if metric == "interactions":
             return self.interaction_count, "Interaction count", "bees"
+        if metric == "nest_distance":
+            return self.nest_component_distance, "Distance to nest component", "px"
+        if metric == "nest_interactions":
+            return self.nest_component_interaction_count, "Nest interaction count", "components"
 
         unit = self.speed_units.currentText()
         table = convert_speed_table_units(
@@ -1970,6 +2698,18 @@ class ReviewHub(QMainWindow):
             px_per_cm=pixels_per_cm,
         )
         return table, "Speed", unit
+
+    def frame_ticks(self, first_frame: int, last_frame: int) -> list[tuple[int, str]]:
+        if last_frame <= first_frame:
+            return [(first_frame, str(first_frame))]
+        n_ticks = min(6, last_frame - first_frame + 1)
+        ticks = np.linspace(first_frame, last_frame, num=n_ticks)
+        values = sorted({int(round(tick)) for tick in ticks})
+        if values[0] != first_frame:
+            values.insert(0, first_frame)
+        if values[-1] != last_frame:
+            values.append(last_frame)
+        return [(value, str(value)) for value in values]
 
     def configure_plot_bounds(self, table: pd.DataFrame):
         if self.tracking.empty:
@@ -1984,8 +2724,15 @@ class ReviewHub(QMainWindow):
             maxXRange=frame_span,
         )
         self.speed_plot.setXRange(first_frame, last_frame, padding=0)
+        self.speed_plot.getAxis("bottom").setTicks([self.frame_ticks(first_frame, last_frame)])
 
-        if self.current_plot_mode() == "heatmap" and not table.empty:
+        if self.current_plot_metric() == "activity" and self.current_plot_mode() == "lines":
+            self.speed_plot.setLimits(yMin=-0.1, yMax=1.1, minYRange=0.1, maxYRange=1.2)
+            self.speed_plot.setYRange(-0.1, 1.1, padding=0)
+        else:
+            self.speed_plot.setLimits(yMin=None, yMax=None, minYRange=None, maxYRange=None)
+
+        if self.current_plot_mode() in {"heatmap", "ethogram"} and not table.empty:
             self.speed_plot.setYRange(-0.5, max(0.5, len(table.columns) - 0.5), padding=0)
 
     def add_reference_lines(self):
@@ -2032,7 +2779,7 @@ class ReviewHub(QMainWindow):
             return
         color = stable_color(bee_id)
         color.setAlpha(240 if selected else 185)
-        width = 4 if selected else 2
+        width = PLOT_SELECTED_LINE_WIDTH if selected else PLOT_LINE_WIDTH
         pen = pg.mkPen(color, width=width)
         self.speed_plot.plot(clean.index.to_numpy(), clean.to_numpy(), pen=pen)
         self.plot_series_by_bee[bee_id] = clean
@@ -2057,6 +2804,45 @@ class ReviewHub(QMainWindow):
         axis = self.speed_plot.getAxis("left")
         ticks = [(row, str(bee_id)) for row, bee_id in enumerate(bees)]
         axis.setTicks([ticks])
+
+    def ethogram_table(self, table: pd.DataFrame) -> pd.DataFrame:
+        return ethogram_state_table(
+            table,
+            self.current_plot_metric(),
+            cutoff=self.interaction_cutoff.value(),
+            activity=self.activity,
+        )
+
+    def ethogram_color(self, state: int | None) -> QColor:
+        metric = self.current_plot_metric()
+        if state is None:
+            return QColor(154, 166, 178, 120)
+        if metric in {"activity", "speed"}:
+            return QColor("#19b66a") if state else QColor("#d8b13f")
+        if metric in {"nest_interactions", "nest_distance"}:
+            return QColor(247, 168, 49, 220) if state else QColor(60, 63, 67, 80)
+        if metric in {"interactions", "nearest_neighbor"}:
+            return QColor(82, 180, 255, 210) if state else QColor(60, 63, 67, 80)
+        return QColor(183, 139, 255, 205) if state else QColor(60, 63, 67, 80)
+
+    def plot_metric_ethogram(self, table: pd.DataFrame):
+        states = self.ethogram_table(table)
+        if states.empty:
+            return
+
+        bees = [int(bee_id) for bee_id in states.columns]
+        self.heatmap_bees = bees
+        self.speed_plot.setLabel("left", "Bee ID")
+        axis = self.speed_plot.getAxis("left")
+        axis.setTicks([[(row, str(bee_id)) for row, bee_id in enumerate(bees)]])
+
+        for row_index, bee_id in enumerate(bees):
+            for start, end, state in contiguous_value_ranges(states[bee_id]):
+                rect = QGraphicsRectItem(start - 0.5, row_index - 0.38, end - start + 1, 0.76)
+                rect.setPen(QPen(Qt.NoPen))
+                rect.setBrush(QBrush(self.ethogram_color(state)))
+                rect.setZValue(-20)
+                self.speed_plot.addItem(rect)
 
     def nearest_plot_bee(self, frame_value: float, speed_value: float) -> tuple[int, int] | None:
         if not self.plot_series_by_bee:
@@ -2101,7 +2887,13 @@ class ReviewHub(QMainWindow):
 
         point = view_box.mapSceneToView(event.scenePos())
         frame = int(round(point.x()))
-        if self.current_plot_mode() == "heatmap":
+        is_double_click = getattr(event, "double", lambda: False)()
+        if is_double_click:
+            self.select_focus_bee(None)
+            self.seek_frame(max(0, min(frame, max(0, self.frame_count - 1))))
+            return
+
+        if self.current_plot_mode() in {"heatmap", "ethogram"}:
             bee_id = self.nearest_heatmap_bee(point.y())
             if bee_id is not None:
                 self.select_focus_bee(bee_id)
@@ -2119,21 +2911,24 @@ class ReviewHub(QMainWindow):
         self.frame_marker = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen("#e6c229", width=1))
         self.speed_plot.addItem(self.frame_marker)
         table, label, units = self.plot_metric_table()
-        self.speed_units.setEnabled(self.current_plot_metric() == "speed")
+        self.speed_units.setEnabled(self.current_plot_metric() == "speed" and self.current_plot_mode() != "ethogram")
         self.speed_plot.setLabel("left", label, units=units)
         self.speed_plot.setLabel("bottom", "Frame (CSV)")
         self.speed_plot.getAxis("left").setTicks(None)
         self.configure_plot_bounds(table)
 
         bee_id = self.selected_bee()
-        self.add_unknown_metric_regions(table, bee_id)
-        self.add_reference_lines()
+        if self.current_plot_mode() != "ethogram":
+            self.add_unknown_metric_regions(table, bee_id)
+            self.add_reference_lines()
 
         if table.empty:
             return
 
         if self.current_plot_mode() == "heatmap":
             self.plot_metric_heatmap(table)
+        elif self.current_plot_mode() == "ethogram":
+            self.plot_metric_ethogram(table)
         elif bee_id is None:
             for plot_bee_id in table.columns:
                 self.plot_metric_series(int(plot_bee_id), table[plot_bee_id])

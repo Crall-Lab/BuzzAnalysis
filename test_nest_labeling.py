@@ -7,6 +7,7 @@ import numpy as np
 from nest_labeling import (
     BROOD_CSV_COLUMNS,
     convert_labelme_json_to_csv,
+    extract_colony_and_date,
     labelme_json_to_rows,
     seeded_labelme_data,
 )
@@ -24,6 +25,12 @@ def _write_json(path, shapes, **extra):
     }
     payload.update(extra)
     path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_extract_colony_and_date_accepts_video_filename_variants():
+    assert extract_colony_and_date("col_15-2021-06-12_00-00-01.mjpeg") == (15, "2021-06-12")
+    assert extract_colony_and_date("bumblebox-17_2024-08-11_00_30_02.mp4") == (17, "2024-08-11")
+    assert extract_colony_and_date("17_2024-08-11_00_30_02.mp4") == (17, "2024-08-11")
 
 
 def test_labelme_json_to_rows_converts_supported_shapes(tmp_path):

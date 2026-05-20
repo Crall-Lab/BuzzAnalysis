@@ -71,13 +71,20 @@ SUPPORTED_SHAPES = {"circle", "point", "polygon", "line", "rectangle"}
 NEST_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp"}
 
 
+COLONY_DATE_PATTERNS = (
+    r"\b(?:col|colony|bumblebox)[-_\s]*0*(?P<colony>\d+)[-_\s]+(?P<date>\d{4}[-_]\d{2}[-_]\d{2})",
+    r"(?:^|[-_\s])0*(?P<colony>\d+)[-_\s]+(?P<date>\d{4}[-_]\d{2}[-_]\d{2})",
+)
+
+
 def extract_colony_and_date(name: str | os.PathLike[str]) -> tuple[int, str] | None:
     """Parse colony number and YYYY-MM-DD date from a tracking/nest filename."""
-    normalized = Path(name).name.replace("_", "-")
-    match = re.search(r"col-?0*(\d+)-(\d{4}-\d{2}-\d{2})", normalized, flags=re.IGNORECASE)
-    if match is None:
-        return None
-    return int(match.group(1)), match.group(2)
+    basename = Path(name).name
+    for pattern in COLONY_DATE_PATTERNS:
+        match = re.search(pattern, basename, flags=re.IGNORECASE)
+        if match is not None:
+            return int(match.group("colony")), match.group("date").replace("_", "-")
+    return None
 
 
 def _matches_target(path: Path, target: tuple[int, str]) -> bool:
