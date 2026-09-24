@@ -1,102 +1,62 @@
 # BuzzAnalysis
-## Overview
-Buzz analysis contains code for analysing data from Bumbleboxes.
 
-<br><br>
+Analyze BumbleBox bee tracking data: clean detections, review tracks over video, label nest features, and calculate activity, proximity contacts, nest use, and activity-transition rates.
 
-## Requirements
-- python3 (tested in Python 3.8.5)
-- numpy
-- pandas
-- scipy
-- shapely
+**Start here:** [Three-page introductory manual (PDF)](docs/intro_manual.pdf) · [Editable manual (HTML)](docs/intro_manual.html) · [Review findings and validation](docs/review_report.md)
 
-python3 should come preinstalled in unix systems but if not, they can be installed with
-```
-sudo apt-get install python3
-```
+## Setup
 
-- pip (or pip3, if native python is not python 3)
-- python modules: numpy, pandas, scipy
+The current workflow is on `testing_May25`. From a fresh checkout:
 
-To install numpy, pandas, and scipy, you will need pip or pip3. To install the requirements:
-```
-sudo apt install pip3
-pip3 install numpy pandas scipy shapely
-```
-
-<br><br>
-
-## Running BuzzAnalysis
-To run BuzzAnalysis, open up terminal and clone this repository. Then run:
-
-```
+```bash
+git clone --branch testing_May25 https://github.com/Crall-Lab/BuzzAnalysis.git
 cd BuzzAnalysis
-python3 ./runMe.py
+conda env create -f environment.yml
+conda activate BuzzAnalysis
 ```
 
-You can also run BuzzAnalysis with the following flags:
-- --source, -s: Directory containing data. Defaults to current working directory.
-- --extension, -e: String at end of all data files from tracking. Defaults to "_updated.csv".
-- --brood, -b: If you want to run functions that work on brood data, provide path to brood data to run brood functions.
-- --broodExtension, -x: String at end of all data files (must be CSVs) containing brood data. Defaults to "_nest_image.csv".
-- --whole, -w: Do not split frame into two when analyzing.
-- --bombus, -z: Data is from rig, run alternative search for data files.
-- -o: add specific output file (if not specified, writes to 'Analysis.csv' in current working directory)
+The environment includes Python 3.13, NumPy, pandas, SciPy, Shapely 2, PyArrow, tqdm, Matplotlib, PySide6, pyqtgraph, Pillow, OpenCV, LabelMe, and pytest. If you already have the environment, activate it; `install_gui_dependencies.sh` installs missing analysis/GUI dependencies into an existing named Conda environment.
 
-<br>
+## First analysis
 
-As an example, to run the analysis on the sample data provided:
-```
-python3 ./runMe.py -s . -e '.csv' -z
+Run from the repository root. This example copies the included sample CSV before producing derived files:
+
+```bash
+mkdir -p demo/raw
+cp worker23_2022-06-20_18-25-30.csv demo/raw/
+python 01_split_lr.py -s demo/raw -e .csv --whole
+python 02_clean_data.py -s demo/raw
+python analyze_clean_data_0.2.py -s demo/raw -o demo/Analysis.csv --save-frame-level
 ```
 
-The results of the analysis can then be found in *Analysis.csv* within the BuzzAnalysis folder (or current working directory). The results from each test called will occupy one column in *Analysis.csv*. Each row represents one bee in one video.
+Tracking CSVs require `frame`, `ID`, `centroidX`, and `centroidY`. Frame numbers and IDs are integers; positions are pixels. The main analysis recognizes worker/col/colony/bumblebox filenames containing date and time. For a custom name layout, use `--filename-positions` with the inclusive positions in `params.py`.
 
-<br><br>
+`Analysis.csv` contains one row per bee/video/side. Optional frame-level CSVs are saved beside the cleaned recordings. `--save-pivots` additionally exports enriched Feather tables. Use `-e` to select a different input suffix, `-b /path/to/labels` for nest maps, `-l 1` for a small first run, and `-c 4` for parallel processing.
 
-## Avaliable tests
-### Base Functions
-- trackedFrames: Gives number of frames a bee is found in
-- distSC: Gives mean distance to social center of a hive (social center calculated as centroid of all tracked positions within the video)
-- meanAct: Gives mean proportion of time spent moving of 
-- meanSpeed: Gives mean moving speed
-- meanIBD: Gives mean distance to other bees in cm
-- totalInt: Gives total number of interactions based on proximity (between between focal bee and all other bees) within a video
-- totalIntFrames: Gives total number of possible interactions between focal bee and all other bees in a video (i.e., total number of tracked frames for all other bees)
-- meanX: Gives mean x-coordinate of bee.
-- meanY: Gives mean y-coordiante of bee.
-- varSpeed: Gives varience of speed of bee.
-- medianMinDistToOthers: Gives median of minimum distance in each frame to other bees.
+## Review and settings
 
-### Brood Functions
-- meanEggDistM: Gives mean distance to eggs across frames (in cm).
-- meanLarvaeDistM: Gives mean distance to larvae across frames.
-- PropLarvaeTime: Gives proportion of time spent on larvae.
-- meanPupaeDistM: Gives mean distance to pupae across frames.
-- PropPupaeTime: Gives proportion of time spent on pupae.
-- meanWaxPotDistM: Gives mean distance to wax pots across frames.
-- medianClosesWaxPotDistM: Gives median of minimum distance in each frame to closest wax pot.
-- PropWaxPotTime: Gives proportion of time spent on wax pots.
-- meanNectarDistM: Gives mean distance to nectar source across frames.
-- meanPollenDistM: Gives mean distance to pollen across frames.
-- meanBroodDistM: Gives mean distance to brood across frames.
-- medianClosestBroodDistM:Gives median of minimum distance in each frame to closest brood.
-- PropBroodTime: Gives proportion of time spent on brood.
-- PropInactiveTime: Gives proportion of time spent off nest and food, and not moving.
+```bash
+python review_metrics_gui.py /path/to/working-data
+python LabelNests_GUI.1.16.py /path/to/labels
+```
 
-<br><br>
+In the review GUI, select a matching tracking CSV under **Metric Controls**, inspect videos, and **Export settings**. Both cleanup and analysis accept `--settings settings.json`. Explicit CLI options override JSON values, which override defaults.
 
-## Parameters
-All avaliable tests except trackedFrames and distSC require user-provided parameters. These are stored in params.py, and should be chosen by the user for each experiment.
+Check FPS, pixel calibration, thresholds, and smoothing against your recordings. Run a compatible colony/camera coordinate system per batch: the main runner pools selected files for its social center. Missing activity is unknown, not inactive. Contacts describe proximity, not verified biological interactions. The manual explains units and output meanings.
 
-## Adding your own tests
-To add your own custom analysis, simply add the relevant code into *baseFunctions.py* or *broodFunctions.py*.
-Any parameters custom tests call can be added into *params.py*. They can then be called as params.*parameter*.
+## Preliminary activity-transition workflow
 
-Each test must only return one column of data and each cell must correspond to one bee in one video.
+`preliminary_newtracks_analysis.py` creates daily Parquet tables and indexes from modern `*_newtracks.csv` files. It requires `--source`, `--labels`, `--output`, `--box-id`, and `--colony-number`. Use a fresh output directory per run. Its raw-track duplicate averaging is separate from the cleaning workflow.
 
-<br><br>
+Run `summarize_inactive_to_active.py RESULTS` or `summarize_nest_transition_rates.py RESULTS` on that output. Excluded tags stay excluded, and contacts are recomputed without them. Plot summary CSVs with `plot_activity_transition_rates.py` and `plot_inactive_to_active_over_time.py`; use the latter's `--fps` option for your recording frame rate. See page 3 of the manual for a complete starting example.
 
-## Maintainers
-Acacia Tang --  [ttang53@wisc.edu](mailto:ttang53@wisc.edu)
+## Validation and documentation
+
+```bash
+QT_QPA_PLATFORM=offscreen python -m pytest -q
+QT_QPA_PLATFORM=offscreen python docs/build_manual.py
+```
+
+The reviewed code passes 86 tests, including complete CLI workflows and plot generation. The manual builder uses installed PySide6 and rejects content that would overflow its three PDF pages. Review scope, corrected result-affecting issues, and tested dependency versions are recorded in [the review report](docs/review_report.md).
+
+Historical `runMe*.py`, `analyze_data_0.1.py`, and `analyze_clean_data_0.1.py` scripts remain available. Start new analyses with `analyze_clean_data_0.2.py`. The coordinate-only `03_compute_intermediates.py` / `04_aggregate_video_means.py` route is optional; brood-aware analysis uses the main runner.

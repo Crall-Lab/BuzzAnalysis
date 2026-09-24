@@ -28,6 +28,7 @@ Reviewed checkout: `testing_May25`, starting from commit `72a0eb5` plus the exis
 - Reproduced **19 failures** with the first regression set before fixes.
 - Final code suite: **86 tests passed** using `QT_QPA_PLATFORM=offscreen python -m pytest -q`.
 - Regression coverage includes minimal-schema cleaning/interpolation, actual CLI runs for Left/Right/Whole/custom suffixes, preservation of input files, nested intermediate processing, parallel brood analysis, distance numerics, exclusions, short recordings, no-contact recordings, summary scripts, and PNG/PDF plot generation.
+- Documentation checks: bundled sample commands completed successfully and produced five bee/video summary rows; all Python files compiled; installer shell syntax passed. The manual PDF has exactly three A4 pages, checked for fit and visual readability.
 - Tested environment: Python 3.13.13; NumPy 2.4.4; pandas 3.0.2; SciPy 1.17.1; Shapely 2.1.2; PyArrow 23.0.1; PySide6 6.11.0; OpenCV 4.13.0; Matplotlib 3.10.9; pytest 9.0.3.
 
 ## Scope and interpretation

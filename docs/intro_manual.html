@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>BuzzAnalysis — Introduction</title>
+<style>
+body {font-family: 'DejaVu Sans', sans-serif; font-size: 9.5pt; line-height: 1.22; color: #22313c; margin: 0;}
+p, td, pre, code {color: #22313c;}
+h1 {font-size: 24pt; color: #153b4b; margin: 0 0 7pt;}
+h2 {font-size: 13pt; color: #153b4b; margin: 13pt 0 5pt;}
+p {margin: 5pt 0 7pt;}
+.kicker {font-size: 9pt; color: #627582; letter-spacing: 1pt;}
+.subtitle {font-size: 12pt; color: #627582;}
+pre {font-family: 'DejaVu Sans Mono', monospace; font-size: 8pt; background: #eef3f5; padding: 7pt; margin: 6pt 0; white-space: pre-wrap;}
+code {font-family: 'DejaVu Sans Mono', monospace; font-size: 8pt;}
+table {border-collapse: collapse; width: 100%; margin: 7pt 0;}
+th,td {border-bottom: 1px solid #d8e2e6; text-align: left; padding: 5pt; vertical-align: top;}
+th {background: #eef3f5; color: #153b4b;}
+a {color: #176985;}
+article {max-width: 180mm; margin: 14mm auto;}
+@page {size: A4; margin: 15mm;}
+@media print {article {margin: 0; max-width: none; break-after: page;} article:last-child {break-after: auto;}}
+</style>
+</head>
+<body>
+<article data-page="1">
+<p class="kicker">BUZZANALYSIS · TESTING_MAY25 · INTRODUCTORY MANUAL</p>
+<h1>1. Get oriented and set up</h1>
+<p class="subtitle">From tracked bee positions to activity, contacts, and nest use.</p>
+<p>BuzzAnalysis analyzes BumbleBox tracking CSVs. Each detection identifies a bee, a video frame, and its image coordinates. The tools clean those detections, display them over video, calculate behavioral measurements, and summarize changes between activity states. Video is needed for visual review; numeric analysis can run from CSVs alone.</p>
+<h2>Install once; activate each session</h2>
+<p>Use a terminal with Conda available. For a fresh installation:</p>
+<pre>git clone --branch testing_May25 \
+  https://github.com/Crall-Lab/BuzzAnalysis.git
+cd BuzzAnalysis
+conda env create -f environment.yml
+conda activate BuzzAnalysis</pre>
+<p>On August’s computer, the reviewed checkout is <code>/home/august/Desktop/new_colony_development/BuzzAnalysis</code>. Open that folder and activate its existing <code>BuzzAnalysis</code> environment. The supplied environment file targets Python 3.13 and includes analysis, plotting, GUI, and test dependencies. Shapely 2 and PyArrow are needed for current geometry and binary-table exports.</p>
+<h2>Prepare one experiment</h2>
+<p>Keep original data separately and work on a copy. Put tracking CSVs and matching videos together, with nest images/annotations in a labels folder. Process one colony or compatible camera coordinate system at a time: the main batch runner computes one social center across the selected input files.</p>
+<table>
+<tr><th>Input</th><th>What it contains</th></tr>
+<tr><td>Tracking CSV&nbsp;&nbsp;</td><td>Required columns: <code>frame</code>, <code>ID</code>, <code>centroidX</code>, <code>centroidY</code>. Frames and IDs are integers; positions are pixels. <code>frontX/frontY</code> are optional.</td></tr>
+<tr><td>Video&nbsp;&nbsp;</td><td>For GUI review, use the same recording stem as the tracking CSV, such as <code>bumblebox-05_2026-05-01_12_00_00.mjpeg</code>.</td></tr>
+<tr><td>Nest map&nbsp;&nbsp;</td><td>LabelMe shapes converted to CSV; identifies arena/nest/foraging perimeters, brood, and food. Example: <code>bumblebox-05-2026-05-01-nest_image.csv</code>.</td></tr>
+</table>
+<h2>Choose the workflow</h2>
+<p><b>Start with the main workflow on page 2:</b> review → split if needed → clean → analyze. It produces one summary row per bee per video and optional frame-level data.</p>
+<p><b>Use the preliminary workflow on page 3</b> for modern <code>*_newtracks.csv</code> recordings and activity-transition studies. It creates a separate set of Parquet tables consumed by the new summary/plot scripts.</p>
+<p>Older <code>runMe*.py</code> and <code>analyze_data_0.1.py</code> files remain for historical workflows. New users should start with <code>analyze_clean_data_0.2.py</code>. Every current command supports <code>--help</code>.</p>
+</article>
+<article data-page="2">
+<p class="kicker">MAIN WORKFLOW · COPY → REVIEW → CLEAN → ANALYZE</p>
+<h1>2. Run your first analysis</h1>
+<h2>Inspect tracks and save settings</h2>
+<pre>python review_metrics_gui.py "/path/to/working-data"</pre>
+<p>Select a video, expand <b>Metric Controls</b>, and choose the matching <b>Tracking CSV</b>. Use Play, the timeline, and ±1 frame to inspect activity and contact overlays. Set Behavior FPS to the frame-number timebase of your recordings. Adjust Speed cutoff, Max speed, Inactive blip frames, Interaction px, and Nest on/off px; then click <b>Export settings</b> and save <code>settings.json</code>.</p>
+<p>Defaults are 4.5 FPS, 3.5 px/frame for activity, 150 px for contacts, 12 px for nest objects, and 150 px/cm. Verify these for your experiment. Set calibration in <code>params.py</code> before launching the GUI. Max speed = 0 disables that filter; inactive blip frames = 0 disables smoothing. Otherwise, up to two inactive frames inside an active bout are smoothed by default.</p>
+<h2>Optional: label nest features</h2>
+<pre>python LabelNests_GUI.1.16.py "/path/to/labels"</pre>
+<p>Choose an image, click <b>Open in LabelMe</b>, draw the relevant labeled shapes, and save. Return to LabelNests and choose <b>Convert all JSON files in folder to CSV</b>. This overwrites existing generated CSVs of the same name. Nest-map device/colony number and date must match the tracking filename.</p>
+<h2>Clean a copied recording</h2>
+<p>The following small example uses the CSV included in the repository. Run these commands from the repository folder. For your own files, replace the sample with copied recordings and select their exact raw suffix.</p>
+<pre>mkdir -p demo/raw
+cp worker23_2022-06-20_18-25-30.csv demo/raw/
+python 01_split_lr.py -s demo/raw -e .csv --whole
+python 02_clean_data.py -s demo/raw</pre>
+<p><code>--whole</code> keeps the whole image; omit it only for a two-arena recording and set <code>--threshold</code> to its dividing X coordinate. Splitting creates per-recording folders. Cleaning creates <code>*_clean.csv</code> files beside the split files. It resolves duplicate IDs; unresolved duplicates are dropped. Add <code>--settings settings.json</code> to apply a nonzero maximum-speed cutoff to isolated spike removal.</p>
+<p>Interpolation is optional: add <code>--interpolate --real-fps 4.5 --max-interp-sec 3</code>, replacing those values with your validated timing. Filled rows have <code>interpolated=1</code>; original rows have 0. Ambiguous one-way jumps are retained and logged.</p>
+<h2>Calculate summaries</h2>
+<pre>python analyze_clean_data_0.2.py -s demo/raw \
+  -o demo/Analysis.csv --save-frame-level</pre>
+<p>For your experiment, add <code>--settings settings.json</code> and optionally <code>-b "/path/to/labels"</code>. Explicit command-line options override JSON settings, which override defaults. Use <code>-l 1</code> for a first-file check; <code>-c 4</code> enables four workers. Supported names start with worker, col, colony, or bumblebox and contain date/time; custom layouts require <code>--filename-positions</code> and the inclusive positions in <code>params.py</code>.</p>
+</article>
+<article data-page="3">
+<p class="kicker">OUTPUTS · TRANSITION STUDIES · TROUBLESHOOTING</p>
+<h1>3. Understand and extend results</h1>
+<table>
+<tr><th>Output</th><th>Contents</th></tr>
+<tr><td><code>Analysis.csv</code>&nbsp;&nbsp;</td><td>One bee/video/side per row: activity, speed, coordinates, contact totals, and optional brood metrics.</td></tr>
+<tr><td><code>*_frame_level.csv</code>&nbsp;&nbsp;</td><td>One bee/frame per row: positions, activity, contacts, distances, on-object flags, and location.</td></tr>
+<tr><td><code>*_pivot_enriched.feather</code>&nbsp;&nbsp;</td><td>Optional wide coordinate/distance/activity/speed tables; enable <code>--save-pivots</code>, read with pandas/PyArrow.</td></tr>
+</table>
+<p><b>Units:</b> activity is 1 (active), 0 (inactive), or missing (unscored). First observations, tracking gaps, and rejected speeds can be unscored. Speed is px/frame; multiply by FPS ÷ pixels/cm for cm/s. Nest and social-center distances are pixels; <code>meanIBD</code> and <code>medianMinDistToOthers</code> are centimeters.</p>
+<p><code>totalInt</code> counts close bee-pair frames, not interaction bouts. <code>totalIntFrames</code> counts observed pair opportunities; it can exceed video frame count. Location prioritizes nest, then foraging, then arena. Missing maps give unknown location.</p>
+<h2>Study activity transitions</h2>
+<p>This workflow expects <code>bumblebox-05_2026-05-01_12_00_00_newtracks.csv</code>-style names. Replace paths/device/colony below; use a fresh results directory.</p>
+<pre>python preliminary_newtracks_analysis.py \
+  --source /path/to/tracks --labels /path/to/labels \
+  --output results --box-id bumblebox-05 --colony-number 65 \
+  --settings settings.json --no-infer-foraging
+python summarize_inactive_to_active.py results
+python summarize_nest_transition_rates.py results</pre>
+<p>This writes daily frame/contact Parquet tables, CSV indexes, summaries, and <code>run_metadata.json</code>. Raw duplicate coordinates are averaged; this preliminary path does not replace cleaning. <code>--no-infer-foraging</code> uses explicit labels rather than the optional rightmost-arena heuristic. Use <code>--exclude-bee-ids 7 23</code> for problematic tags; exclusions carry into summaries and contact recalculation.</p>
+<pre>python plot_activity_transition_rates.py \
+  results/activity_transition_rates_by_location_contact.csv</pre>
+<p>Plots write PNG/PDF. <code>plot_inactive_to_active_over_time.py</code> plots a date summary; set <code>--fps</code> for your experiment. Transition rates use adjacent scored frames within each bee/video, grouped by starting state and context. Rate/second = rate/frame × FPS, not a one-second probability.</p>
+<h2>Troubleshoot and check</h2>
+<p><b>No files:</b> check source and suffix (<code>-e</code>). <b>Missing/ambiguous map:</b> keep one matching device/date map. <b>Unexpected activity:</b> check FPS, calibration, smoothing, and video. <b>Blank metrics:</b> inspect missing detections and terminal warnings. Test the software with <code>QT_QPA_PLATFORM=offscreen python -m pytest -q</code>. Preserve settings with results and inspect representative videos before scaling up.</p>
+</article>
+</body>
+</html>
