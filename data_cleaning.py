@@ -1,49 +1,84 @@
 #!/usr/bin/env python
 
-import pandas as pd
-import numpy as np
 import math
-
-#August added back into data_cleaning.py on May 14th, 2025
-#Remove tag detections that jump over a threshold number of pixels from one frame to the very next frame
-#NOTE: this is not yet robust and its effect needs to be tested - the following scenario presents an issue for the current code:
-#Tag 20 is detected in frame 5, 6, and 7
-#The first detection, upon review, is the false detection - it is across the nest from where bee 20 actually is.
-#The next detection jumps back to the correct position. But which detection actually gets dropped?
-#My current understanding upon review and without testing is that the true tag detection would be dropped, which is incorrect.
-#I think the third detection would be fine in this case.
-#BUT WAIT: in the scenario where bee 20 is tracked in 5,6,7: if detection 6 is the false detection, the diff row between 6 and 7
-#would also be flagged, and would detection 7 be removed? Needs testing! 
-import math
-import pandas as pd
 import os
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+
+def _jump_log_path(args):
+    source = Path(args.source).expanduser().resolve()
+    return str(source.parent / f"{source.name}_jump_log.csv")
+
+
+def _speed_between(prev_frame, prev_position, next_frame, next_position):
+    frame_gap = int(next_frame) - int(prev_frame)
+    if frame_gap <= 0:
+        return np.nan
+    return math.dist(prev_position, next_position) / frame_gap
+
+
+def _append_jump_context(
+    log_entries,
+    cleaned_df,
+    *,
+    indices,
+    labels,
+    video_id,
+    action,
+    reason,
+    speed_prev_curr=np.nan,
+    speed_curr_next=np.nan,
+    speed_prev_next=np.nan,
+    transition_speed=np.nan,
+    frame_gap=np.nan,
+    threshold=np.nan,
+):
+    for idx, label in zip(indices, labels):
+        row = cleaned_df.loc[idx].copy()
+        row['video'] = video_id
+        row['label'] = label
+        row['action'] = action
+        row['reason'] = reason
+        row['speed_prev_curr_px_per_frame'] = speed_prev_curr
+        row['speed_curr_next_px_per_frame'] = speed_curr_next
+        row['speed_prev_next_px_per_frame'] = speed_prev_next
+        row['transition_speed_px_per_frame'] = transition_speed
+        row['frame_gap'] = frame_gap
+        row['max_speed_px_per_frame'] = threshold
+        log_entries.append(row)
+
 
 def remove_jumps(df, args, filename):
     """
-    Flag suspicious jumps in ArUco tag tracking data, log them, and
-    remove the jump rows from the returned dataframe.
+    Remove clear isolated ArUco tag-read spikes and log ambiguous high-speed transitions.
+
+    A point is removed only when it is a jump-out-and-back spike:
+      previous -> current exceeds the threshold,
+      current -> next exceeds the threshold,
+      previous -> next does not exceed the threshold.
+
+    One-way high-speed transitions are logged but retained. The downstream
+    analysis max-speed filter should mark those transitions as unknown.
 
     Args:
-        interpolated_df (pd.DataFrame): tracking data with columns ['ID', 'frame', 'centroidX', 'centroidY']
-        jump_thresh (float): pixel threshold for detecting jumps
-        log_path (str): path to append the jump log CSV file
+        df (pd.DataFrame): tracking data with columns ['ID', 'frame', 'centroidX', 'centroidY']
+        args.remove_jumps (float): maximum plausible speed in pixels per frame
         video_id (str): identifier for the current video
 
     Returns:
-        pd.DataFrame: DataFrame with jump rows removed.
+        pd.DataFrame: DataFrame with clear isolated spike rows removed.
     """
     cleaned_df = df.copy()
     cleaned_df['flagged_as_jump'] = False
-    jump_thresh = args.remove_jumps
-    log_path = f"{os.path.dirname(args.source)}/{os.path.basename(args.source)}_jump_log.csv"
+    jump_thresh = float(args.remove_jumps)
+    log_path = _jump_log_path(args)
     print(log_path)
 
-    #if len(df['filename'].unique()) == 1:
-    #    video_id = df.loc[0, 'filename']
-    #    print(video_id)
     video_id = filename
     print(video_id)
-
 
     log_entries = []
 
@@ -53,44 +88,103 @@ def remove_jumps(df, args, filename):
         frames = bee_df['frame'].values
         indices = bee_df.index.values
 
+        flagged_indices = set()
+
         for i in range(1, len(positions) - 1):
             frame_prev = frames[i - 1]
             frame_curr = frames[i]
             frame_next = frames[i + 1]
 
-            if frame_curr - frame_prev == 1 and frame_next - frame_curr == 1:
-                prev = positions[i - 1]
-                curr = positions[i]
-                next = positions[i + 1]
+            prev = positions[i - 1]
+            curr = positions[i]
+            next_pos = positions[i + 1]
 
-                dist_prev = math.dist(prev, curr)
-                dist_next = math.dist(curr, next)
+            speed_prev_curr = _speed_between(frame_prev, prev, frame_curr, curr)
+            speed_curr_next = _speed_between(frame_curr, curr, frame_next, next_pos)
+            speed_prev_next = _speed_between(frame_prev, prev, frame_next, next_pos)
 
-                if dist_prev > jump_thresh and dist_next > jump_thresh:
-                    jump_index = indices[i]
-                    prev_index = indices[i - 1]
-                    next_index = indices[i + 1]
+            if (
+                indices[i - 1] not in flagged_indices
+                and speed_prev_curr > jump_thresh
+                and speed_curr_next > jump_thresh
+                and speed_prev_next <= jump_thresh
+            ):
+                jump_index = indices[i]
+                prev_index = indices[i - 1]
+                next_index = indices[i + 1]
 
-                    cleaned_df.loc[jump_index, 'flagged_as_jump'] = True
+                cleaned_df.loc[jump_index, 'flagged_as_jump'] = True
+                flagged_indices.add(jump_index)
 
-                    # Add log entries
-                    for idx, label in zip([prev_index, jump_index, next_index], ['neighbor', 'jump', 'neighbor']):
-                        row = cleaned_df.loc[idx].copy()
-                        row['video'] = video_id
-                        row['label'] = label
-                        log_entries.append(row)
+                _append_jump_context(
+                    log_entries,
+                    cleaned_df,
+                    indices=[prev_index, jump_index, next_index],
+                    labels=['neighbor', 'jump', 'neighbor'],
+                    video_id=video_id,
+                    action='removed_isolated_spike',
+                    reason='jump_out_and_back_bridge_plausible',
+                    speed_prev_curr=speed_prev_curr,
+                    speed_curr_next=speed_curr_next,
+                    speed_prev_next=speed_prev_next,
+                    threshold=jump_thresh,
+                )
+
+        for i in range(1, len(positions)):
+            prev_index = indices[i - 1]
+            curr_index = indices[i]
+            if prev_index in flagged_indices or curr_index in flagged_indices:
+                continue
+
+            frame_prev = frames[i - 1]
+            frame_curr = frames[i]
+            speed = _speed_between(frame_prev, positions[i - 1], frame_curr, positions[i])
+            if speed > jump_thresh:
+                _append_jump_context(
+                    log_entries,
+                    cleaned_df,
+                    indices=[prev_index, curr_index],
+                    labels=['transition_start', 'transition_end'],
+                    video_id=video_id,
+                    action='kept_ambiguous_high_speed_transition',
+                    reason='one_way_high_speed_transition',
+                    transition_speed=speed,
+                    frame_gap=int(frame_curr) - int(frame_prev),
+                    threshold=jump_thresh,
+                )
 
     # Append to CSV log
     if log_entries:
         log_df = pd.DataFrame(log_entries)
-        log_columns = ['video', 'ID', 'frame', 'centroidX', 'centroidY', 'label']
+        log_columns = [
+            'video',
+            'ID',
+            'frame',
+            'centroidX',
+            'centroidY',
+            'label',
+            'action',
+            'reason',
+            'speed_prev_curr_px_per_frame',
+            'speed_curr_next_px_per_frame',
+            'speed_prev_next_px_per_frame',
+            'transition_speed_px_per_frame',
+            'frame_gap',
+            'max_speed_px_per_frame',
+        ]
         log_df = log_df[log_columns]
 
+        if os.path.exists(log_path):
+            previous = pd.read_csv(log_path)
+            if previous.columns.tolist() != log_columns:
+                if "action" not in previous and "label" in previous:
+                    previous["action"] = np.where(previous["label"] == "jump", "removed_isolated_spike", "unknown")
+                previous.reindex(columns=log_columns).to_csv(log_path, index=False)
         write_header = not os.path.exists(log_path)
         print(f"write_header: {write_header}")
         log_df.to_csv(log_path, mode='a', header=write_header, index=False)
     else:
-        print("No jumps detected -> no jump log written")
+        print("No jumps or ambiguous high-speed transitions detected -> no jump log written")
 
     jump_mask = cleaned_df['flagged_as_jump']
     n_removed = int(jump_mask.sum())
@@ -102,7 +196,7 @@ def remove_jumps(df, args, filename):
 
 def summarize_jump_log(args):
     """
-    Summarize total jump detections per bee across all videos.
+    Summarize removed spike detections and retained ambiguous transitions.
 
     Args:
         log_path (str): path to the CSV log file
@@ -110,41 +204,61 @@ def summarize_jump_log(args):
     Prints:
         Total jump counts per bee ID and optional per video.
     """
-    log_path = f"{os.path.dirname(args.source)}/{os.path.basename(args.source)}_jump_log.csv"
+    log_path = _jump_log_path(args)
 
     if not os.path.exists(log_path):
         print("No log file found.")
         return
 
     log_df = pd.read_csv(log_path)
+    if 'action' not in log_df.columns:
+        log_df['action'] = np.where(log_df['label'] == 'jump', 'removed_isolated_spike', 'unknown')
 
-    summary = (
-        log_df[log_df['label'] == 'jump']
+    removed = (
+        log_df[(log_df['action'] == 'removed_isolated_spike') & (log_df['label'] == 'jump')]
         .groupby('ID')
         .size()
-        .reset_index(name='n_jumps')
-        .sort_values('n_jumps', ascending=False)
+        .reset_index(name='n_removed_spikes')
+        .sort_values('n_removed_spikes', ascending=False)
     )
 
-    print("🐝 Potential Tag Jump Summary by Bee ID:")
-    print(summary.to_string(index=False))
+    ambiguous = (
+        log_df[
+            (log_df['action'] == 'kept_ambiguous_high_speed_transition')
+            & (log_df['label'] == 'transition_end')
+        ]
+        .groupby('ID')
+        .size()
+        .reset_index(name='n_ambiguous_high_speed_transitions')
+        .sort_values('n_ambiguous_high_speed_transitions', ascending=False)
+    )
 
-#check for multiples of the same tag in each frame
+    if removed.empty:
+        print("No isolated spike points were removed.")
+    else:
+        print("Removed isolated spike points by bee ID:")
+        print(removed.to_string(index=False))
+
+    if ambiguous.empty:
+        print("No ambiguous one-way high-speed transitions were logged.")
+    else:
+        print("Ambiguous one-way high-speed transitions kept for analysis-time filtering:")
+        print(ambiguous.to_string(index=False))
+
+def _duplicate_keys(df):
+    required = {"ID", "frame", "centroidX", "centroidY"}
+    missing = required - set(df.columns)
+    if missing:
+        raise ValueError(f"Tracking data missing required columns: {sorted(missing)}")
+    return [col for col in ("filename", "colony number", "ID", "frame") if col in df]
+
+
 def return_duplicate_bees(df):
-    df.drop_duplicates(inplace=True)  # Drop completely duplicate rows
-    try:
-        #for the duplicated function based on specific columns, keep=False makes it so that both duplicates are marked True
-        df['in_frame_duplicate'] = df.duplicated(['filename', 'ID', 'frame', 'colony number'], keep=False)
-        if True in df['in_frame_duplicate'].values:
-            print('Yes, there are duplicate tag readings in the same frame! They’ve been marked True in the duplicates column.')
-            return df, 0
-        else:
-            print('There aren’t any duplicates in this dataframe!')
-            return df, 1
-    except Exception as e:
-        print(f'''An error occurred in return_duplicate_bees(): {str(e)}
-                 Ensure the DataFrame has the required columns: 'filename', 'ID', 'frame', 'colony number'.''')
-        return df, 1  # Return original DataFrame to avoid breaking downstream logic
+    """Flag repeated IDs within a frame; video/colony metadata is optional."""
+    keys = _duplicate_keys(df)
+    df = df.drop_duplicates().copy().reset_index(drop=True)
+    df["in_frame_duplicate"] = df.duplicated(keys, keep=False)
+    return df, int(not df["in_frame_duplicate"].any())
 
 
 #Helper function that runs inside of the drop_duplicates_clean function (below)
@@ -181,119 +295,45 @@ def resolve_duplicate_by_proximity(duplicate_rows, nearest_row):
 
 
 def drop_duplicates_clean(df, return_val, drop_unresolvable=True):
-    """
-    Resolves duplicate detections of the same bee ID within a single frame based on spatial proximity
-    to known positions in neighboring frames. Keeps the most plausible tag and optionally flags or
-    drops unresolved duplicates.
-
-    Parameters:
-    df (DataFrame): The tracking data with potential duplicates.
-    return_val (int): Returned value from return_duplicate_bees(), 0 if duplicates exist.
-    drop_unresolvable (bool): Whether to drop duplicate rows that couldn't be confidently resolved.
-
-    Returns:
-    DataFrame: A cleaned DataFrame with resolved duplicates removed and the best candidate retained.
-    """
-    df = df.copy()  # Work on a copy to avoid modifying original data
-    df.drop_duplicates(inplace=True)  # Drop any fully duplicated rows
-
-    # Sanity check to make sure duplicates have already been identified
-    if 'in_frame_duplicate' not in df.columns:
-        print("Hey, have you run the return_duplicate_bees() function? I'm not seeing a duplicate column in this dataframe.")
-        return df
-
-    # Add helper columns to track which rows were part of a duplicate set and what happened to them
-    df['og_duplicate'] = False
-    df['unresolvable_duplicate'] = False
-
-    if return_val == 0:
-        # Subset to rows marked as duplicates
-        duplicates = df[df['in_frame_duplicate'] == True]
-
-        # Create a table of unique (video, colony, bee ID, frame) combinations with duplicates
-        dupe_keys = duplicates[['filename', 'colony number', 'ID', 'frame']].drop_duplicates()
-
-        # Loop through each unique duplicated instance
-        for _, row in dupe_keys.iterrows():
-            vid = row['filename']
-            col = row['colony number']
-            bee = row['ID']
-            frame = row['frame']
-
-            # Get all the duplicated rows for this (video, colony, bee ID, frame)
-            specific_duplicates = duplicates[
-                (duplicates['filename'] == vid) &
-                (duplicates['colony number'] == col) &
-                (duplicates['ID'] == bee) &
-                (duplicates['frame'] == frame)
-            ]
-
-            # Find other positions of the same bee in other frames (same video)
-            nearest_position_v1 = df[
-                (df['filename'] == vid) &
-                (df['colony number'] == col) &
-                (df['ID'] == bee) &
-                (df['frame'] != frame)
-            ]
-
-            # If no known positions exist in other frames, we can't resolve this duplicate
-            if nearest_position_v1.empty:
-                df.loc[specific_duplicates.index, 'unresolvable_duplicate'] = True
-                continue
-
-            # Find the position in another frame that is temporally closest to the duplicate frame
-            nearest_position_v2 = nearest_position_v1.iloc[
-                (nearest_position_v1['frame'] - frame).abs().argsort()[:1]
-            ]
-
-            # Skip resolution if the nearest frame is too far away to trust
-            if nearest_position_v2.empty or abs(nearest_position_v2['frame'].values[0] - frame) > 16:
-                df.loc[specific_duplicates.index, 'unresolvable_duplicate'] = True
-                continue
-
-            # Call modular function to find best candidate detection among the duplicates
-            idx_to_keep, tag_to_keep = resolve_duplicate_by_proximity(
-                specific_duplicates, nearest_position_v2.iloc[0]
-            )
-
-            # Drop all other candidates in the same frame with same ID
-            drop_idxs = df[
-                (df['filename'] == vid) &
-                (df['colony number'] == col) &
-                (df['ID'] == bee) &
-                (df['frame'] == frame) &
-                ((df['centroidX'] != tag_to_keep['centroidX']) |
-                 (df['centroidY'] != tag_to_keep['centroidY']))
-            ].index
-            df.drop(index=drop_idxs, inplace=True)
-
-            # Mark the kept tag as a resolved original duplicate
-            good_idx = df[
-                (df['filename'] == vid) &
-                (df['colony number'] == col) &
-                (df['ID'] == bee) &
-                (df['frame'] == frame) &
-                (df['centroidX'] == tag_to_keep['centroidX']) &
-                (df['centroidY'] == tag_to_keep['centroidY'])
-            ].index
-            df.loc[good_idx, 'in_frame_duplicate'] = False
-            df.loc[good_idx, 'og_duplicate'] = True
-
-        # Optionally remove any unresolved duplicates
-        if drop_unresolvable:
-            df.drop(df[df['unresolvable_duplicate'] == True].index, inplace=True)
-
-    elif return_val == 1 and isinstance(df, pd.DataFrame):
-        # If no duplicates existed, still ensure tracking columns exist
-        df['og_duplicate'] = False
-        df['unresolvable_duplicate'] = False
-
-    return df
+    """Resolve duplicate IDs using the nearest unambiguous observation (within 16 frames)."""
+    keys = _duplicate_keys(df)
+    df = df.copy()
+    df["og_duplicate"] = False
+    df["unresolvable_duplicate"] = False
+    df["in_frame_duplicate"] = df.duplicated(keys, keep=False)
+    context = [key for key in keys if key != "frame"]
+    duplicates = df.loc[df["in_frame_duplicate"]]
+    drop_indices = []
+    for values, candidates in duplicates.groupby(keys, dropna=False, sort=False):
+        values = dict(zip(keys, values))
+        mask = ~df["in_frame_duplicate"] & (df["frame"] != values["frame"])
+        for key in context:
+            mask &= df[key].isna() if pd.isna(values[key]) else df[key].eq(values[key])
+        neighbors = df.loc[mask].dropna(subset=["centroidX", "centroidY"])
+        neighbors = neighbors.loc[(neighbors["frame"] - values["frame"]).abs() <= 16]
+        keep = None
+        if not neighbors.empty:
+            nearest = neighbors.loc[(neighbors["frame"] - values["frame"]).abs().idxmin()]
+            keep, _ = resolve_duplicate_by_proximity(candidates, nearest)
+        if keep is None:
+            df.loc[candidates.index, "unresolvable_duplicate"] = True
+            if drop_unresolvable:
+                drop_indices.extend(candidates.index)
+        else:
+            drop_indices.extend(index for index in candidates.index if index != keep)
+            df.loc[keep, "in_frame_duplicate"] = False
+            df.loc[keep, "og_duplicate"] = True
+    return df.drop(index=drop_indices)
 
 
 # Updated function to interpolate missing frames only if the gap between them is less than or equal to max_frame_gap
 # Updated on May 14th by August to add an interpolation column marking 0 as not an interpolated row, and 1 as yes interpolated
 def interpolate(df, max_seconds_gap, actual_frames_per_second):
+    if not np.isfinite(actual_frames_per_second) or actual_frames_per_second <= 0:
+        raise ValueError("actual_frames_per_second must be finite and positive")
+    if not np.isfinite(max_seconds_gap) or max_seconds_gap < 0:
+        raise ValueError("max_seconds_gap must be finite and nonnegative")
+    df = df.copy()
     max_frame_gap = int(max_seconds_gap * actual_frames_per_second)
     print(f"Max frame gap based on --max-interp-sec and --real-fps: {max_frame_gap}")
 
@@ -335,12 +375,12 @@ def interpolate(df, max_seconds_gap, actual_frames_per_second):
                 next_row = group.iloc[i + 1]
                 # If the frame difference is less than or equal to the max frame gap, interpolate
                 if 0 < next_row['frame_diff'] <= max_frame_gap:
-                    num_frames_to_interpolate = next_row['frame_diff'] - 1
+                    num_frames_to_interpolate = int(next_row['frame_diff']) - 1
                     for n in range(1, num_frames_to_interpolate + 1):
                         interp_row = row.copy()
                         ratio = n / next_row['frame_diff']
                         # Interpolate the position columns
-                        for col in ['centroidX', 'centroidY', 'frontX', 'frontY']:
+                        for col in [c for c in ('centroidX', 'centroidY', 'frontX', 'frontY') if c in group]:
                             interp_row[col] = row[col] + (next_row[col] - row[col]) * ratio
                         # Set frame number and interpolation flag
                         interp_row['frame'] = int(row['frame'] + n)

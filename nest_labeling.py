@@ -12,8 +12,12 @@ import re
 from pathlib import Path
 from typing import Any, Iterable
 
-import cv2
 import numpy as np
+
+try:
+    import cv2
+except ModuleNotFoundError:
+    cv2 = None
 
 
 BROOD_CSV_COLUMNS = [
@@ -29,6 +33,7 @@ BROOD_CSV_COLUMNS = [
 
 NEST_LABELS = [
     "Arena perimeter (polygon)",
+    "Foraging perimeter (polygon)",
     "Nest perimeter (polygon)",
     "Eggs perimeter (polygons)",
     "Eggs (points)",
@@ -50,6 +55,7 @@ CALIBRATION_LABELS = ["Calibration A->B (line)"]
 # OpenCV uses BGR colors.
 LABEL_COLORS_BGR = {
     "Arena perimeter (polygon)": (0, 0, 128),
+    "Foraging perimeter (polygon)": (128, 64, 0),
     "Nest perimeter (polygon)": (0, 128, 0),
     "Eggs perimeter (polygons)": (0, 128, 128),
     "Eggs (points)": (128, 0, 0),
@@ -71,8 +77,14 @@ SUPPORTED_SHAPES = {"circle", "point", "polygon", "line", "rectangle"}
 NEST_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp"}
 
 
+def _require_cv2():
+    if cv2 is None:
+        raise ModuleNotFoundError("OpenCV (cv2) is required for image operations, but not for JSON-to-CSV conversion.")
+    return cv2
+
+
 COLONY_DATE_PATTERNS = (
-    r"\b(?:col|colony|bumblebox)[-_\s]*0*(?P<colony>\d+)[-_\s]+(?P<date>\d{4}[-_]\d{2}[-_]\d{2})",
+    r"\b(?:col|colony|bumblebox|worker)[-_\s]*0*(?P<colony>\d+)[-_\s]+(?P<date>\d{4}[-_]\d{2}[-_]\d{2})",
     r"(?:^|[-_\s])0*(?P<colony>\d+)[-_\s]+(?P<date>\d{4}[-_]\d{2}[-_]\d{2})",
 )
 
@@ -164,6 +176,7 @@ def seeded_labelme_data(
     target_image_path: str | os.PathLike[str],
 ) -> dict[str, Any]:
     """Copy previous annotations onto a new image and refresh image metadata."""
+    _require_cv2()
     data = load_labelme_json(previous_json_path)
     target_image_path = Path(target_image_path)
     image = cv2.imread(str(target_image_path))
@@ -267,6 +280,7 @@ def generate_annotated_image(
     output_path: str | os.PathLike[str],
 ) -> bool:
     """Draw LabelMe shapes and a compact legend onto an image."""
+    _require_cv2()
     data = load_labelme_json(json_path)
     image = cv2.imread(str(image_path))
     if image is None:

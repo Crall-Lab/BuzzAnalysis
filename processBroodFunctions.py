@@ -40,7 +40,7 @@ def minDistance(A, B, P) :
     elif (AB_AP < 0):
         y = P[1] - A[1]
         x = P[0] - A[0] 
-        return (x * x + y * y)*0.5
+        return (x * x + y * y)**0.5
  
     # Case 3 
     else:
@@ -50,6 +50,8 @@ def minDistance(A, B, P) :
         x2 = AP[0]; 
         y2 = AP[1]; 
         mod = (x1 * x1 + y1 * y1)**0.5
+        if mod == 0:
+            return float(np.hypot(x2, y2))
         return abs(x1 * y2 - y1 * x2) / mod
     
 
@@ -58,30 +60,10 @@ def distanceFromCentroid_new(oneLR, allbrood):
     if len(oneLR.columns) == 0 or len(allbrood.index) == 0:
         return pd.DataFrame()
 
-    n_frames = oneLR.shape[0]
-    n_bees = oneLR.shape[1] // 2 #divide by two here because for each bee, there is an x and y column
-    # --- compute distances the same way you do now ---
-    oneM = oneLR.values.reshape(n_frames, n_bees, 2)
-
-    #print("after first transformation, head and shape:")
-    #print(oneM)
-    #print(oneM.shape)
-
-    #oneM = np.expand_dims(oneM, axis=3)
-
-    oneMx = oneM[:,:,0]
-    #oneMx = oneM[0,:,:,:]
-
-    #print("oneMx")
-    #print(oneMx)
-    #print(oneMx.shape)
-
-    oneMy = oneM[:,:,1]
-    #oneMy = oneM[1,:,:,:]
-
-    #print("oneMy")
-    #print(oneMy)
-    #print(oneMy.shape)
+    allbrood = allbrood.reset_index(drop=True)
+    bee_ids = [bee for feature, bee in oneLR.columns if feature == "centroidX"]
+    oneMx = oneLR.loc[:, [("centroidX", bee) for bee in bee_ids]].to_numpy(dtype=float)
+    oneMy = oneLR.loc[:, [("centroidY", bee) for bee in bee_ids]].to_numpy(dtype=float)
 
     allbroodx = allbrood['x'].to_numpy()
     allbroody = allbrood['y'].to_numpy()
@@ -306,7 +288,7 @@ def minimumDistancePolygon_new(oneLR: pd.DataFrame, eggs: pd.DataFrame) -> pd.Da
 
     polys = []
     for lab, obj in zip(labels, obj_indices):
-        df_obj = eggs[eggs["object index"] == obj]
+        df_obj = eggs[(eggs["object index"] == obj) & (eggs["label"] == lab)]
         poly = _polygon_from_vertices(df_obj)
         polys.append(poly)
 

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import random
 import sys
 from dataclasses import dataclass
@@ -56,8 +57,11 @@ from nest_labeling import (
 from params import (
     digital_noise_speed_cutoff,
     frame_per_sec,
+    inactive_gap_max_frames,
     interaction_distance_cutoff,
     max_behavior_gap_seconds,
+    max_speed_cutoff,
+    onDist,
     pixels_per_cm,
 )
 
@@ -70,11 +74,14 @@ SETTINGS_APP = "MetricReviewHub"
 LAST_SOURCE_PATH_KEY = "last_source/path"
 LAST_SOURCE_RANDOMIZE_KEY = "last_source/randomize"
 NOID_TAG_COLOR = QColor("#ff4fb8")
+MAX_SPEED_MARK_COLOR = QColor("#ff3045")
 NEST_MAP_LINE_WIDTH = 6
 TRAIL_LINE_WIDTH = 4
 NEST_INTERACTION_LINE_WIDTH = 4
 NEST_DISTANCE_LINE_WIDTH = 6
 NEST_INTERACTION_HIGHLIGHT_ALPHA = 128
+INTERACTION_LINE_COLOR = QColor("#00e5ff")
+INTERACTION_HALO_COLOR = QColor("#ffea3b")
 PLOT_LINE_WIDTH = 4
 PLOT_SELECTED_LINE_WIDTH = 7
 
@@ -434,6 +441,8 @@ def compute_activity_tables(
     frame_rate: float,
     max_gap_seconds: float,
     speed_cutoff: float,
+    max_speed_cutoff: float = 0,
+    inactive_gap_max_frames: int = 0,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     pivot = pivot_tracking(tracking)
     return movement_metrics(
@@ -441,7 +450,47 @@ def compute_activity_tables(
         frame_rate=frame_rate,
         max_gap_seconds=max_gap_seconds,
         speed_cutoff=speed_cutoff,
+        max_speed_cutoff=max_speed_cutoff,
+        inactive_gap_max_frames=inactive_gap_max_frames,
     )
+
+
+def compute_raw_speed_table(
+    tracking: pd.DataFrame,
+    *,
+    frame_rate: float,
+    max_gap_seconds: float,
+) -> pd.DataFrame:
+    """Return per-frame speed before activity/max-speed filtering."""
+    pivot = pivot_tracking(tracking)
+    if pivot.empty:
+        return pd.DataFrame()
+
+    frame_rate = float(frame_rate)
+    max_gap_seconds = float(max_gap_seconds)
+    if frame_rate <= 0:
+        raise ValueError("frame_rate must be greater than zero")
+    if max_gap_seconds <= 0:
+        raise ValueError("max_gap_seconds must be greater than zero")
+
+    frame_values = pd.Series(pivot.index, index=pivot.index)
+    frame_values = pd.to_numeric(frame_values, errors="coerce")
+    frame_gap = frame_values.diff()
+    valid_gap = (frame_gap > 0) & (frame_gap <= frame_rate * max_gap_seconds)
+
+    displacement = np.sqrt(pivot["centroidX"].diff(axis=0) ** 2 + pivot["centroidY"].diff(axis=0) ** 2)
+    speed = displacement.div(frame_gap.replace(0, np.nan), axis=0)
+    return speed.where(valid_gap, np.nan)
+
+
+def is_over_max_speed(speed_value, max_speed_cutoff: float) -> bool:
+    return max_speed_cutoff > 0 and pd.notna(speed_value) and float(speed_value) > float(max_speed_cutoff)
+
+
+def overlay_speed_value(filtered_speed, raw_speed, over_max: bool):
+    if over_max and pd.notna(raw_speed):
+        return raw_speed
+    return filtered_speed
 
 
 def social_center_from_tracking_paths(paths: Iterable[Path]) -> tuple[float, float] | None:
@@ -532,7 +581,12 @@ def compute_interaction_count_table(tracking: pd.DataFrame, cutoff: float) -> pd
 
 def is_nest_metric_label(label: str) -> bool:
     clean = label.strip().lower()
-    return bool(clean) and not clean.startswith("arena perimeter") and "calibration" not in clean
+    return (
+        bool(clean)
+        and not clean.startswith("arena perimeter")
+        and not clean.startswith("nest perimeter")
+        and "calibration" not in clean
+    )
 
 
 def nest_components_from_brood_map(brood_map: pd.DataFrame, *, metrics_only: bool = True) -> list[NestComponent]:
@@ -1235,6 +1289,9 @@ class VideoLabel(QLabel):
             elif kind == "cross":
                 painter.drawLine(QPointF(swatch_x, center_y), QPointF(swatch_x + 14, center_y))
                 painter.drawLine(QPointF(swatch_x + 7, center_y - 7), QPointF(swatch_x + 7, center_y + 7))
+            elif kind == "x":
+                painter.drawLine(QPointF(swatch_x, center_y - 7), QPointF(swatch_x + 14, center_y + 7))
+                painter.drawLine(QPointF(swatch_x, center_y + 7), QPointF(swatch_x + 14, center_y - 7))
             elif kind == "text":
                 painter.setPen(QPen(color, 1))
                 painter.drawText(QRectF(swatch_x - 2, row_y, 26, row_h), Qt.AlignVCenter, "12")
@@ -1262,6 +1319,7 @@ class ReviewHub(QMainWindow):
         self.video_frame_count_known = False
         self.video_fps = frame_per_sec
         self._capture_next_frame: int | None = None
+        self._capture_needs_reset = False
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.next_frame)
 
@@ -1273,6 +1331,7 @@ class ReviewHub(QMainWindow):
         self.noid_status_message = "No noID CSV loaded"
         self.activity = pd.DataFrame()
         self.speed = pd.DataFrame()
+        self.raw_speed = pd.DataFrame()
         self.social_center_distance = pd.DataFrame()
         self.nearest_neighbor_distance = pd.DataFrame()
         self.interaction_count = pd.DataFrame()
@@ -1439,6 +1498,14 @@ class ReviewHub(QMainWindow):
         self.speed_cutoff.setValue(float(digital_noise_speed_cutoff))
         self.speed_cutoff.valueChanged.connect(self.recompute_metrics)
 
+        self.max_speed_cutoff = QDoubleSpinBox()
+        self.max_speed_cutoff.setRange(0, 100000)
+        self.max_speed_cutoff.setDecimals(2)
+        self.max_speed_cutoff.setSingleStep(10)
+        self.max_speed_cutoff.setValue(float(max_speed_cutoff))
+        self.max_speed_cutoff.setToolTip("Speeds above this px/frame value are treated as unknown; 0 disables this filter")
+        self.max_speed_cutoff.valueChanged.connect(self.recompute_metrics)
+
         self.behavior_fps = QDoubleSpinBox()
         self.behavior_fps.setRange(0.01, 1000)
         self.behavior_fps.setDecimals(2)
@@ -1452,11 +1519,26 @@ class ReviewHub(QMainWindow):
         self.max_gap.setValue(float(max_behavior_gap_seconds))
         self.max_gap.valueChanged.connect(self.recompute_metrics)
 
+        self.inactive_gap_frames = QSpinBox()
+        self.inactive_gap_frames.setRange(0, 1000)
+        self.inactive_gap_frames.setValue(int(inactive_gap_max_frames))
+        self.inactive_gap_frames.setToolTip("Inactive runs this many frames or shorter are treated as active when active frames surround them")
+        self.inactive_gap_frames.valueChanged.connect(self.recompute_metrics)
+
         self.interaction_cutoff = QDoubleSpinBox()
         self.interaction_cutoff.setRange(0, 10000)
         self.interaction_cutoff.setDecimals(1)
         self.interaction_cutoff.setValue(float(interaction_distance_cutoff))
         self.interaction_cutoff.valueChanged.connect(self.recompute_metrics)
+
+        self.nest_object_cutoff = QDoubleSpinBox()
+        self.nest_object_cutoff.setRange(0, 10000)
+        self.nest_object_cutoff.setDecimals(1)
+        self.nest_object_cutoff.setValue(float(onDist))
+        self.nest_object_cutoff.setToolTip("Pixel distance used to decide whether a bee is on a nest object")
+        self.nest_object_cutoff.valueChanged.connect(self.recompute_nest_component_metrics)
+        self.nest_object_cutoff.valueChanged.connect(self.update_focus_plot)
+        self.nest_object_cutoff.valueChanged.connect(self.render_current_frame)
 
         self.trail_frames = QSpinBox()
         self.trail_frames.setRange(1, 500)
@@ -1467,13 +1549,20 @@ class ReviewHub(QMainWindow):
         self.focus_bee.currentIndexChanged.connect(self.update_focus_plot)
         self.focus_bee.currentIndexChanged.connect(self.render_current_frame)
 
+        self.export_settings_btn = QPushButton("Export settings")
+        self.export_settings_btn.clicked.connect(self.export_analysis_settings)
+
         layout.addRow("Tracking CSV", self.tracking_source)
         layout.addRow("Speed cutoff", self.speed_cutoff)
+        layout.addRow("Max speed px/frame", self.max_speed_cutoff)
         layout.addRow("Behavior FPS", self.behavior_fps)
         layout.addRow("Max gap sec", self.max_gap)
+        layout.addRow("Inactive blip frames", self.inactive_gap_frames)
         layout.addRow("Interaction px", self.interaction_cutoff)
+        layout.addRow("Nest on/off px", self.nest_object_cutoff)
         layout.addRow("Trail frames", self.trail_frames)
         layout.addRow("Focus bee", self.focus_bee)
+        layout.addRow(self.export_settings_btn)
         box.setChecked(False)
         return box
 
@@ -1674,6 +1763,7 @@ class ReviewHub(QMainWindow):
         self.video_fps = float(self.capture.get(cv2.CAP_PROP_FPS)) or frame_per_sec
         self.current_frame = 0
         self._capture_next_frame = 0
+        self._capture_needs_reset = False
         self._last_frame_bgr = None
         self._last_frame_index = None
         self.timeline.setRange(0, max(0, self.frame_count - 1))
@@ -1807,6 +1897,7 @@ class ReviewHub(QMainWindow):
         self.rows_by_frame = {}
         self.activity = pd.DataFrame()
         self.speed = pd.DataFrame()
+        self.raw_speed = pd.DataFrame()
         self.social_center_distance = pd.DataFrame()
         self.nearest_neighbor_distance = pd.DataFrame()
         self.interaction_count = pd.DataFrame()
@@ -2089,7 +2180,58 @@ class ReviewHub(QMainWindow):
         self.nest_component_distance, self.nest_component_interaction_count = compute_nest_component_tables(
             self.tracking,
             self.brood_map,
-            cutoff=self.interaction_cutoff.value(),
+            cutoff=self.nest_object_cutoff.value(),
+        )
+
+    def current_analysis_settings(self) -> dict[str, float | int | str]:
+        return {
+            "schema": "BuzzAnalysis analysis settings",
+            "version": 1,
+            "frame_per_sec": float(self.behavior_fps.value()),
+            "max_behavior_gap_seconds": float(self.max_gap.value()),
+            "digital_noise_speed_cutoff": float(self.speed_cutoff.value()),
+            "max_speed_cutoff": float(self.max_speed_cutoff.value()),
+            "inactive_gap_max_frames": int(self.inactive_gap_frames.value()),
+            "interaction_distance_cutoff": float(self.interaction_cutoff.value()),
+            "onDist": float(self.nest_object_cutoff.value()),
+            "pixels_per_cm": float(pixels_per_cm),
+        }
+
+    def export_analysis_settings(self):
+        session = self.current_session()
+        start_dir = Path.cwd()
+        if session is not None and session.source_root is not None:
+            start_dir = session.source_root
+        default_path = start_dir / "buzzanalysis_settings.json"
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export BuzzAnalysis settings",
+            str(default_path),
+            "BuzzAnalysis settings (*.json)",
+        )
+        if not path:
+            return
+
+        out_path = Path(path)
+        if out_path.suffix.lower() != ".json":
+            out_path = out_path.with_suffix(".json")
+        try:
+            out_path.write_text(
+                json.dumps(self.current_analysis_settings(), indent=2) + "\n",
+                encoding="utf-8",
+            )
+        except Exception as exc:
+            QMessageBox.warning(self, "Settings export failed", f"Could not write settings file:\n{exc}")
+            return
+
+        QMessageBox.information(
+            self,
+            "Settings exported",
+            (
+                f"Saved settings file:\n{out_path}\n\n"
+                f"Use it with 02_clean_data.py --settings {out_path}\n"
+                f"and analyze_clean_data_0.2.py --settings {out_path}"
+            ),
         )
 
     def current_tracking_pattern(self) -> str | None:
@@ -2137,6 +2279,7 @@ class ReviewHub(QMainWindow):
         if self.tracking.empty:
             self.activity = pd.DataFrame()
             self.speed = pd.DataFrame()
+            self.raw_speed = pd.DataFrame()
             self.social_center_distance = pd.DataFrame()
             self.nearest_neighbor_distance = pd.DataFrame()
             self.interaction_count = pd.DataFrame()
@@ -2146,11 +2289,18 @@ class ReviewHub(QMainWindow):
             self.social_center_file_count = 0
             return
         self.update_social_center()
+        self.raw_speed = compute_raw_speed_table(
+            self.tracking,
+            frame_rate=self.behavior_fps.value(),
+            max_gap_seconds=self.max_gap.value(),
+        )
         self.activity, self.speed = compute_activity_tables(
             self.tracking,
             frame_rate=self.behavior_fps.value(),
             max_gap_seconds=self.max_gap.value(),
             speed_cutoff=self.speed_cutoff.value(),
+            max_speed_cutoff=self.max_speed_cutoff.value(),
+            inactive_gap_max_frames=self.inactive_gap_frames.value(),
         )
         self.social_center_distance = compute_social_center_distance_table(
             self.tracking,
@@ -2172,6 +2322,10 @@ class ReviewHub(QMainWindow):
         if self.timer.isActive():
             self.stop_playback()
         else:
+            if self.frame_count and self.current_frame >= self.frame_count - 1:
+                self._capture_needs_reset = True
+                if not self.seek_frame(0):
+                    return
             interval = int(1000 / max(1.0, self.video_fps))
             self.timer.start(interval)
             self.play_button.setText("Pause")
@@ -2179,6 +2333,8 @@ class ReviewHub(QMainWindow):
     def stop_playback(self):
         self.timer.stop()
         self.play_button.setText("Play")
+        if self.frame_count and self.current_frame >= self.frame_count - 1:
+            self._capture_needs_reset = True
 
     def previous_session(self):
         if not self.sessions:
@@ -2241,8 +2397,11 @@ class ReviewHub(QMainWindow):
         if self.show_speed_labels.isChecked():
             items.append(("text", "Speed label", QColor("#f6f8fb")))
 
+        if self.max_speed_cutoff.value() > 0:
+            items.append(("x", "Over max speed", MAX_SPEED_MARK_COLOR))
+
         if self.show_interactions.isChecked():
-            items.append(("line", "Interaction", QColor(82, 180, 255, 180)))
+            items.append(("line", "Interaction link/halo", INTERACTION_LINE_COLOR))
 
         if self.show_nest_interactions.isChecked() and not self.brood_map.empty:
             items.append(("dot", "Nest interaction", QColor(247, 168, 49, 190)))
@@ -2280,6 +2439,9 @@ class ReviewHub(QMainWindow):
             self.capture.release()
         self.capture = cv2.VideoCapture(str(session.video_path))
         self._capture_next_frame = 0
+        self._capture_needs_reset = False
+        self._last_frame_bgr = None
+        self._last_frame_index = None
         return self.capture.isOpened()
 
     def read_frame_by_reopening(self, frame_index: int):
@@ -2294,14 +2456,18 @@ class ReviewHub(QMainWindow):
         return frame
 
     def read_video_frame(self, frame_index: int):
-        if self._last_frame_index == frame_index and self._last_frame_bgr is not None:
+        needs_reset = getattr(self, "_capture_needs_reset", False)
+        if not needs_reset and self._last_frame_index == frame_index and self._last_frame_bgr is not None:
             return self._last_frame_bgr.copy() if hasattr(self._last_frame_bgr, "copy") else self._last_frame_bgr
         if self.capture is None:
             return None
 
         frame = None
         ok = False
-        if self._capture_next_frame == frame_index:
+        if needs_reset:
+            frame = self.read_frame_by_reopening(frame_index)
+            ok = frame is not None
+        elif self._capture_next_frame == frame_index:
             ok, frame = self.capture.read()
         else:
             if self.capture.set(cv2.CAP_PROP_POS_FRAMES, frame_index):
@@ -2311,10 +2477,12 @@ class ReviewHub(QMainWindow):
                 ok = frame is not None
 
         if not ok:
+            self._capture_needs_reset = True
             return None
         self._last_frame_bgr = frame
         self._last_frame_index = frame_index
         self._capture_next_frame = frame_index + 1
+        self._capture_needs_reset = False
         return frame
 
     def render_current_frame(self) -> bool:
@@ -2378,7 +2546,12 @@ class ReviewHub(QMainWindow):
                 state = self.activity_state(self.current_frame, bee_id)
                 stats[state] += 1
                 speed_value = self.speed_value(self.current_frame, bee_id)
-                self.draw_bee(painter, row, state, speed_value, dim)
+                raw_speed_value = self.raw_speed_value(self.current_frame, bee_id)
+                over_max = is_over_max_speed(raw_speed_value, self.max_speed_cutoff.value())
+                self.draw_bee(painter, row, state, speed_value, raw_speed_value, over_max, dim)
+
+        if self.show_interactions.isChecked() and rows is not None:
+            self.draw_interaction_labels(painter, rows, selected, width, height)
 
         painter.end()
         total = sum(stats.values())
@@ -2415,7 +2588,28 @@ class ReviewHub(QMainWindow):
             return np.nan
         return self.speed.loc[frame, bee_id]
 
-    def draw_bee(self, painter: QPainter, row, state: str, speed_value, dim: bool):
+    def raw_speed_value(self, frame: int, bee_id: int):
+        if self.raw_speed.empty or frame not in self.raw_speed.index or bee_id not in self.raw_speed.columns:
+            return np.nan
+        return self.raw_speed.loc[frame, bee_id]
+
+    def draw_max_speed_marker(self, painter: QPainter, x: float, y: float, marker_scale: float, dim: bool):
+        size = 12 * marker_scale
+        underlay_width = max(5, int(4 * marker_scale))
+        line_width = max(3, int(2.5 * marker_scale))
+        color = QColor(MAX_SPEED_MARK_COLOR)
+        color.setAlpha(150 if dim else 245)
+
+        painter.save()
+        painter.setPen(QPen(QColor(18, 18, 18, 230), underlay_width, Qt.SolidLine, Qt.RoundCap))
+        painter.drawLine(QPointF(x - size, y - size), QPointF(x + size, y + size))
+        painter.drawLine(QPointF(x - size, y + size), QPointF(x + size, y - size))
+        painter.setPen(QPen(color, line_width, Qt.SolidLine, Qt.RoundCap))
+        painter.drawLine(QPointF(x - size, y - size), QPointF(x + size, y + size))
+        painter.drawLine(QPointF(x - size, y + size), QPointF(x + size, y - size))
+        painter.restore()
+
+    def draw_bee(self, painter: QPainter, row, state: str, speed_value, raw_speed_value, over_max: bool, dim: bool):
         x, y = float(row.centroidX), float(row.centroidY)
         base = stable_color(int(row.ID))
         activity_colors = {
@@ -2442,6 +2636,9 @@ class ReviewHub(QMainWindow):
             painter.setBrush(Qt.NoBrush)
             painter.drawEllipse(QPointF(x, y), radius + ring_gap, radius + ring_gap)
 
+        if over_max:
+            self.draw_max_speed_marker(painter, x, y, marker_scale, dim)
+
         id_font = painter.font()
         id_font.setPixelSize(int(14 * marker_scale))
         id_font.setBold(True)
@@ -2463,7 +2660,9 @@ class ReviewHub(QMainWindow):
             speed_font.setPixelSize(int(12 * marker_scale))
             speed_font.setBold(False)
             painter.setFont(speed_font)
-            text = "unknown" if pd.isna(speed_value) else f"{speed_value:.2f} px/fr"
+            label_speed = overlay_speed_value(speed_value, raw_speed_value, over_max)
+            text = "unknown" if pd.isna(label_speed) else f"{label_speed:.2f} px/fr"
+            painter.setPen(QPen(MAX_SPEED_MARK_COLOR if over_max else QColor("#f6f8fb"), max(1, int(marker_scale / 2))))
             painter.drawText(
                 QRect(
                     int(x + 11 * marker_scale),
@@ -2511,19 +2710,107 @@ class ReviewHub(QMainWindow):
             )
         painter.restore()
 
-    def draw_interactions(self, painter: QPainter, rows: pd.DataFrame, selected):
-        cutoff = self.interaction_cutoff.value()
+    def interaction_contacts(self, rows: pd.DataFrame, selected):
+        cutoff = float(self.interaction_cutoff.value())
         values = rows[["ID", "centroidX", "centroidY"]].to_numpy()
-        painter.setPen(QPen(QColor(82, 180, 255, 150), 2))
+        contacts: list[tuple[int, int, float, float, float, float, float]] = []
+        interacting_positions: dict[int, tuple[float, float]] = {}
         for i in range(len(values)):
             bee_a, x1, y1 = values[i]
+            bee_a = int(bee_a)
+            x1 = float(x1)
+            y1 = float(y1)
             for j in range(i + 1, len(values)):
                 bee_b, x2, y2 = values[j]
-                if selected is not None and selected not in {int(bee_a), int(bee_b)}:
+                bee_b = int(bee_b)
+                x2 = float(x2)
+                y2 = float(y2)
+                if selected is not None and selected not in {bee_a, bee_b}:
                     continue
                 d = float(np.hypot(x1 - x2, y1 - y2))
                 if d <= cutoff:
-                    painter.drawLine(QPointF(float(x1), float(y1)), QPointF(float(x2), float(y2)))
+                    contacts.append((bee_a, bee_b, x1, y1, x2, y2, d))
+                    interacting_positions[bee_a] = (x1, y1)
+                    interacting_positions[bee_b] = (x2, y2)
+        return contacts, interacting_positions
+
+    def draw_interactions(self, painter: QPainter, rows: pd.DataFrame, selected):
+        contacts, interacting_positions = self.interaction_contacts(rows, selected)
+        if not contacts:
+            return
+
+        painter.save()
+        painter.setBrush(Qt.NoBrush)
+        shadow_pen = QPen(QColor(6, 10, 16, 230), 16, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+        link_pen = QPen(INTERACTION_LINE_COLOR, 7, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+        for _bee_a, _bee_b, x1, y1, x2, y2, _d in contacts:
+            start = QPointF(x1, y1)
+            end = QPointF(x2, y2)
+            painter.setPen(shadow_pen)
+            painter.drawLine(start, end)
+            painter.setPen(link_pen)
+            painter.drawLine(start, end)
+
+        painter.setPen(QPen(QColor(6, 10, 16, 230), 14))
+        for x, y in interacting_positions.values():
+            painter.drawEllipse(QPointF(x, y), 45, 45)
+        painter.setPen(QPen(INTERACTION_HALO_COLOR, 7))
+        for x, y in interacting_positions.values():
+            painter.drawEllipse(QPointF(x, y), 45, 45)
+
+        painter.restore()
+
+    def draw_interaction_labels(self, painter: QPainter, rows: pd.DataFrame, selected, width: int, height: int):
+        contacts, _interacting_positions = self.interaction_contacts(rows, selected)
+        if not contacts:
+            return
+        if selected is not None or len(contacts) <= 6:
+            painter.save()
+            label_font = painter.font()
+            label_font.setPixelSize(28)
+            label_font.setBold(True)
+            painter.setFont(label_font)
+            metrics = painter.fontMetrics()
+            for index, (bee_a, bee_b, x1, y1, x2, y2, d) in enumerate(contacts):
+                text = f"{bee_a}-{bee_b}  {d:.0f}px"
+                text_w = metrics.horizontalAdvance(text)
+                label_w = text_w + 24
+                label_h = 40
+                mid_x = (x1 + x2) / 2.0
+                mid_y = (y1 + y2) / 2.0
+                dx = x2 - x1
+                dy = y2 - y1
+                length = float(np.hypot(dx, dy))
+                if length > 0:
+                    normal_x = -dy / length
+                    normal_y = dx / length
+                else:
+                    normal_x = 0.0
+                    normal_y = -1.0
+                offset = 78 + (index % 3) * 18
+                if index % 2:
+                    offset *= -1
+                label_x = mid_x + normal_x * offset - label_w / 2.0
+                label_y = mid_y + normal_y * offset - label_h / 2.0
+
+                if label_x < 4 or label_x + label_w > width - 4 or label_y < 4 or label_y + label_h > height - 4:
+                    label_x = mid_x - normal_x * abs(offset) - label_w / 2.0
+                    label_y = mid_y - normal_y * abs(offset) - label_h / 2.0
+                label_x = min(max(label_x, 4), max(4, width - label_w - 4))
+                label_y = min(max(label_y, 4), max(4, height - label_h - 4))
+
+                rect = QRectF(
+                    label_x,
+                    label_y,
+                    label_w,
+                    label_h,
+                )
+                painter.setPen(QPen(QColor("#f6f8fb"), 3))
+                painter.setBrush(QColor(6, 10, 16, 218))
+                painter.drawRoundedRect(rect, 8, 8)
+                painter.setPen(QColor("#f6f8fb"))
+                painter.drawText(rect, Qt.AlignCenter, text)
+            painter.restore()
 
     def draw_social_center(self, painter: QPainter, rows: pd.DataFrame | None):
         cx, cy = self.social_center
@@ -2588,7 +2875,7 @@ class ReviewHub(QMainWindow):
         if not components:
             return
 
-        cutoff = self.interaction_cutoff.value()
+        cutoff = self.nest_object_cutoff.value()
         active_components: list[NestComponent] = []
         for _, row in rows.iterrows():
             bee_id = int(row.ID)
@@ -2691,8 +2978,9 @@ class ReviewHub(QMainWindow):
             return self.nest_component_interaction_count, "Nest interaction count", "components"
 
         unit = self.speed_units.currentText()
+        speed_table = self.raw_speed if not self.raw_speed.empty else self.speed
         table = convert_speed_table_units(
-            self.speed,
+            speed_table,
             unit,
             frame_rate=self.behavior_fps.value(),
             px_per_cm=pixels_per_cm,
@@ -2753,6 +3041,23 @@ class ReviewHub(QMainWindow):
         line.setZValue(5)
         self.speed_plot.addItem(line)
 
+        max_cutoff = float(self.max_speed_cutoff.value())
+        if max_cutoff <= 0:
+            return
+        max_line = pg.InfiniteLine(
+            pos=convert_speed_cutoff_units(
+                max_cutoff,
+                self.speed_units.currentText(),
+                frame_rate=self.behavior_fps.value(),
+                px_per_cm=pixels_per_cm,
+            ),
+            angle=0,
+            movable=False,
+            pen=pg.mkPen(MAX_SPEED_MARK_COLOR, width=2, style=Qt.DashDotLine),
+        )
+        max_line.setZValue(6)
+        self.speed_plot.addItem(max_line)
+
     def metric_unknown_mask(self, table: pd.DataFrame, bee_id: int | None) -> pd.Series:
         if table.empty:
             return pd.Series(dtype=bool)
@@ -2806,10 +3111,12 @@ class ReviewHub(QMainWindow):
         axis.setTicks([ticks])
 
     def ethogram_table(self, table: pd.DataFrame) -> pd.DataFrame:
+        metric = self.current_plot_metric()
+        cutoff = self.nest_object_cutoff.value() if metric == "nest_distance" else self.interaction_cutoff.value()
         return ethogram_state_table(
             table,
-            self.current_plot_metric(),
-            cutoff=self.interaction_cutoff.value(),
+            metric,
+            cutoff=cutoff,
             activity=self.activity,
         )
 

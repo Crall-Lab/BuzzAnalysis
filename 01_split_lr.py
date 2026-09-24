@@ -38,7 +38,9 @@ def main():
                    help="Skip L/R split; keep full arena and label as Whole")
     args = p.parse_args()
 
-    files = list(iter_files(args.source, args.extension))       # materialise first
+    generated_suffixes = ("_Left.csv", "_Right.csv", "_Whole.csv", "_clean.csv", "_frame_level.csv", "_nest_image.csv")
+    files = sorted(path for path in iter_files(args.source, args.extension)
+                   if not path.endswith(generated_suffixes))
     if not files:
         print(f"[split-lr] ❌  No files ending with “{args.extension}” found in "
               f"{os.path.abspath(args.source)}.", file=sys.stderr)

@@ -39,26 +39,26 @@ def meanSpeed(oneLR):
 
 def meanIBD(oneLR):
     """Calculates mean distance to other bees in cm."""
-    if len(oneLR.columns) == 2:
+    if oneLR['centroidX'].shape[1] == 1:
         print("No interactions possible, only one tag found in video.")
         return None
     ib_dists = interbee_distance_matrix(oneLR)
     ib_dist_mean = np.nanmean(ib_dists, axis=0)
-    self_ind = ib_dist_mean == 0
+    self_ind = np.eye(ib_dist_mean.shape[0], dtype=bool)
     ib_dist_mean[self_ind] = np.nan
     ibd_mean = np.nanmean(ib_dist_mean, axis=1)
     return ibd_mean/pixels_per_cm
 
 def totalInt(oneLR):
     """Calculates total number of interactions between bees in a video."""
-    if len(oneLR.columns) == 2:
+    if oneLR['centroidX'].shape[1] == 1:
         print("No interactions possible, only one tag found in video.")
-        return None
+        return np.zeros(oneLR['centroidX'].shape[1])
     ib_dists = interbee_distance_matrix(oneLR)
     for fn in range(len(ib_dists)):
         frame_dists= ib_dists[fn]
-        frame_dists[frame_dists==0] = np.inf
-        int_mat = frame_dists < interaction_distance_cutoff
+        np.fill_diagonal(frame_dists, np.inf)
+        int_mat = frame_dists <= interaction_distance_cutoff
         int_mat = 1*int_mat
 
         if fn == 0:
@@ -69,19 +69,19 @@ def totalInt(oneLR):
     return np.nansum(int_sums, axis=0)
 
 def totalIntFrames(oneLR):
-    """Calculates number of frames in a video where at least one interaction is detected."""
-    if len(oneLR.columns) == 2:
+    """Count observable bee-pair frames per bee (potential interaction opportunities)."""
+    if oneLR['centroidX'].shape[1] == 1:
         print("No interactions possible, only one tag found in video.")
-        return None
+        return np.zeros(oneLR['centroidX'].shape[1])
     ib_dists = interbee_distance_matrix(oneLR)
     ib_dist_mean = np.nanmean(ib_dists, axis=0)
-    self_ind = ib_dist_mean == 0
+    self_ind = np.eye(ib_dist_mean.shape[0], dtype=bool)
     ib_dist_mean[self_ind] = np.nan
 
     for fn in range(len(ib_dists)):
         frame_dists= ib_dists[fn]
-        frame_dists[frame_dists==0] = np.inf
-        int_mat = frame_dists < interaction_distance_cutoff
+        np.fill_diagonal(frame_dists, np.inf)
+        int_mat = frame_dists <= interaction_distance_cutoff
         int_mat = 1*int_mat
 
         if fn == 0:
@@ -109,7 +109,7 @@ def varSpeed(oneLR):
 
 def medianMinDistToOthers(oneLR):
     """Median minimum distance to other bees in cm."""
-    if len(oneLR.columns) == 2:
+    if oneLR['centroidX'].shape[1] == 1:
         print("No interactions possible, only one tag found in video.")
         return None
     ibm = np.array(interbee_distance_matrix(oneLR))

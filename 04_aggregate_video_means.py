@@ -21,16 +21,22 @@ def load_funcs(include_brood=False):
     return f
 
 def summarise_one(feather_path, funcs):
-    vid = os.path.basename(feather_path).split("_")[0]    # workerID_YYYY... prefix
-    pivot = pd.read_feather(feather_path).set_index("frame")
-    ordered_ids = pivot.columns.levels[1]                 # same trick as runMe13.py :contentReference[oaicite:6]{index=6}:contentReference[oaicite:7]{index=7}
+    vid = os.path.basename(feather_path).removesuffix("_pivot.feather")
+    pivot = pd.read_feather(feather_path)
+    if "frame" in pivot.columns:
+        pivot = pivot.set_index("frame")
+    ordered_ids = pivot["centroidX"].columns                 # same trick as runMe13.py :contentReference[oaicite:6]{index=6}:contentReference[oaicite:7]{index=7}
     summary = pd.DataFrame(index=ordered_ids)
     summary["video"] = vid
     summary["bee_ID"] = summary.index
 
     for name, fn in funcs:
         try:
-            res = fn(pivot)
+            if name == "distSC":
+                center = [np.nanmean(pivot["centroidX"]), np.nanmean(pivot["centroidY"])]
+                res = fn(pivot, center)
+            else:
+                res = fn(pivot)
             if isinstance(res, (list, np.ndarray)):
                 res = pd.Series(res, index=ordered_ids)
             summary[name] = res
@@ -46,7 +52,9 @@ def main():
     p.add_argument("-b","--brood", action="store_true")
     a = p.parse_args()
 
-    funcs = load_funcs(include_brood=a.brood)
+    if a.brood:
+        p.error("Coordinate-only intermediates have no brood distances; use analyze_clean_data_0.2.py -b MAP_FOLDER")
+    funcs = load_funcs()
     all_vids = []
 
     for f in iter_files(a.source, "_pivot.feather"):

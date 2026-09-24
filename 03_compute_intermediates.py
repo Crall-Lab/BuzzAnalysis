@@ -1,54 +1,43 @@
 #!/usr/bin/env python3
-"""
-Compute frame-level derived metrics and per-bee summaries.
-Outputs two files per input:
-    • <basename>_pivot.feather        (pivoted X/Y dataframe)
-    • <basename>_intermediate.npz     (NumPy archive of heavy arrays)
-"""
-import argparse, os, numpy as np, pandas as pd
-from baseFunctions import interbee_distance_matrix           # heavy
-from utils_io import iter_files, ensure_dir
-from runMe13 import restructure_tracking_data                # reuse proven helper :contentReference[oaicite:4]{index=4}:contentReference[oaicite:5]{index=5}
-import pickle, pathlib
+"""Write coordinate pivots and interbee distances for each *_clean.csv file."""
+import argparse
+from concurrent.futures import ProcessPoolExecutor
+from pathlib import Path
 
-def compute(one_clean_csv, args):
-    print("Got to compute")
+import numpy as np
+import pandas as pd
+from aux import interbee_distance_matrix
+from utils_io import iter_files
+
+
+def compute(one_clean_csv, args=None):
     raw = pd.read_csv(one_clean_csv)
-    # Re-use proven pivot / restructure function
-    # Supply dummy opts dict (only remove_jumps and interpolate flags needed)
-    opts = dict(interpolate=False, remove_jumps=None)
-    pivot = restructure_tracking_data(raw, opts,
-                                      interpolated_path_name=None)
-    # Heavy intermediates --------------------------------------------------
-    ib_dist = interbee_distance_matrix(pivot)        # 3-D array (frames × bees × bees)
-    npz_path = one_clean_csv.replace("_clean.csv","_intermediate.npz")
-    np.savez_compressed(npz_path, interbee=ib_dist)
-    print("saved npz")
-    # Light intermediate ---------------------------------------------------
-    feather_path = one_clean_csv.replace("_clean.csv","_pivot.feather")
-    ensure_dir(feather_path)
-    pivot.reset_index().to_feather(feather_path)
-    return pivot.shape[1]//2   # number of bees
+    pivot = raw.pivot_table(index="frame", columns="ID", values=["centroidX", "centroidY"]).sort_index(axis=1)
+    path = Path(one_clean_csv)
+    stem = path.name.removesuffix("_clean.csv")
+    np.savez_compressed(path.with_name(stem + "_intermediate.npz"), interbee=interbee_distance_matrix(pivot))
+    pivot.to_feather(path.with_name(stem + "_pivot.feather"))
+    return pivot["centroidX"].shape[1] if not pivot.empty else 0
+
 
 def main():
-    p = argparse.ArgumentParser()
-    p.add_argument("-s","--source", default=".", help="*_clean.csv from step 2")
-    p.add_argument("-c","--cores", type=int, default=1)
-    a = p.parse_args()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("-s", "--source", default=".")
+    parser.add_argument("-c", "--cores", type=int, default=1)
+    args = parser.parse_args()
+    if args.cores < 1:
+        parser.error("--cores must be positive")
+    files = sorted(iter_files(args.source, "_clean.csv"))
+    if not files:
+        parser.error("No *_clean.csv files found")
+    if args.cores > 1:
+        with ProcessPoolExecutor(max_workers=args.cores) as pool:
+            counts = list(pool.map(compute, files))
+    else:
+        counts = [compute(path) for path in files]
+    for path, count in zip(files, counts):
+        print(f"Saved intermediates: {path} ({count} bees)")
 
-    print(a.source)
-    #for f in iter_files(a.source, "_clean.csv"):
-    for paths, dirs, files in os.walk(a.source):
-        print("Got here")
-        for dir in dirs:
-            print(dir)
-            for filename in os.listdir(dir):
-                if filename.endswith("_clean.csv"):
-
-                    print("starting")
-                    print(a.source)
-                    n = compute(filename, a)
-                    print(f"✔ {filename}   ({n} bees)")
 
 if __name__ == "__main__":
     main()

@@ -158,13 +158,20 @@ class LabelNestsApp(QtWidgets.QWidget):
 
         # ------------- State & File List -------------
         self.folder_path = os.path.abspath(folder_path)
-        self.image_list = sorted([
+        all_images = sorted([
             f for f in os.listdir(self.folder_path)
-            if f.lower().endswith(('.png', '.jpg', '.jpeg')) and not f.endswith('_annotated.png')
+            if f.lower().endswith(('.png', '.jpg', '.jpeg'))
         ])
+        raw_images = [f for f in all_images if not f.lower().endswith('_annotated.png')]
+        annotated_images = [f for f in all_images if f.lower().endswith('_annotated.png')]
+        self.image_list = raw_images if raw_images else annotated_images
         self.current_index = 0
         if start_image and start_image in self.image_list:
             self.current_index = self.image_list.index(start_image)
+        elif start_image:
+            annotated_start = f"{self._base_name_for_image(start_image)}_annotated.png"
+            if annotated_start in self.image_list:
+                self.current_index = self.image_list.index(annotated_start)
 
         self.autoloaded_data = None
         self.viewing_annotated_current = False
@@ -358,6 +365,20 @@ class LabelNestsApp(QtWidgets.QWidget):
             return base_name
         return f"{base_name[:max_chars - 3]}..."
 
+    @staticmethod
+    def _base_name_for_image(file_name):
+        base_name, _ = os.path.splitext(os.path.basename(file_name))
+        if base_name.lower().endswith("_annotated"):
+            return base_name[:-len("_annotated")]
+        return base_name
+
+    def _paths_for_image(self, image_name):
+        base_name = self._base_name_for_image(image_name)
+        image_path = os.path.join(self.folder_path, image_name)
+        json_path = os.path.join(self.folder_path, f"{base_name}.json")
+        annotated_path = os.path.join(self.folder_path, f"{base_name}_annotated.png")
+        return base_name, image_path, json_path, annotated_path
+
     def _set_neighbor_toggle_text(self, side, target_name=None, annotated=False, missing_annotations=False):
         if side not in ("prev", "next"):
             return
@@ -405,6 +426,7 @@ class LabelNestsApp(QtWidgets.QWidget):
         current_env = os.path.dirname(os.path.dirname(sys.executable))
         envs_root = os.path.dirname(current_env)
         candidates.append(os.path.join(envs_root, "buzzanalysis_labelme", "bin", "python"))
+        candidates.append(os.path.join(envs_root, "LabelNests", "bin", "python"))
         candidates.append(sys.executable)
 
         for path in candidates:
@@ -419,10 +441,7 @@ class LabelNestsApp(QtWidgets.QWidget):
         
         self.autoloaded_data = None
         image_name = self.image_list[self.current_index]
-        image_path = os.path.join(self.folder_path, image_name)
-        base_name, _ = os.path.splitext(image_name)
-        json_path = os.path.join(self.folder_path, f"{base_name}.json")
-        annotated_path = os.path.join(self.folder_path, f"{base_name}_annotated.png")
+        base_name, image_path, json_path, annotated_path = self._paths_for_image(image_name)
 
         # --- Determine status banner text ---
         if os.path.exists(json_path) and os.path.exists(annotated_path):
@@ -472,7 +491,7 @@ class LabelNestsApp(QtWidgets.QWidget):
         else:
             if self.current_index > 0:
                 prev_name = self.image_list[self.current_index - 1]
-                prev_base, _ = os.path.splitext(prev_name)
+                prev_base = self._base_name_for_image(prev_name)
                 prev_json = os.path.join(self.folder_path, f"{prev_base}.json")
                 if os.path.exists(prev_json):
                     try:
@@ -510,10 +529,7 @@ class LabelNestsApp(QtWidgets.QWidget):
 
         self.autoloaded_data = None
         image_name = self.image_list[self.current_index]
-        image_path = os.path.join(self.folder_path, image_name)
-        base_name, _ = os.path.splitext(image_name)
-        json_path = os.path.join(self.folder_path, f"{base_name}.json")
-        annotated_path = os.path.join(self.folder_path, f"{base_name}_annotated.png")
+        base_name, image_path, json_path, annotated_path = self._paths_for_image(image_name)
 
         if not os.path.exists(annotated_path) and os.path.exists(json_path):
             self.generate_annotated_image(image_path, json_path, annotated_path)
@@ -594,10 +610,7 @@ class LabelNestsApp(QtWidgets.QWidget):
             self._set_neighbor_toggle_text("prev", None)
             return
         target_name = self.image_list[target_index]
-        base_name, _ = os.path.splitext(target_name)
-        image_path = os.path.join(self.folder_path, target_name)
-        annotated_path = os.path.join(self.folder_path, f"{base_name}_annotated.png")
-        json_path = os.path.join(self.folder_path, f"{base_name}.json")
+        base_name, image_path, json_path, annotated_path = self._paths_for_image(target_name)
         old_scale = self.prev_label.scale_factor
 
         if self.viewing_annotated_prev:
@@ -637,10 +650,7 @@ class LabelNestsApp(QtWidgets.QWidget):
             self._set_neighbor_toggle_text("next", None)
             return
         target_name = self.image_list[target_index]
-        base_name, _ = os.path.splitext(target_name)
-        image_path = os.path.join(self.folder_path, target_name)
-        annotated_path = os.path.join(self.folder_path, f"{base_name}_annotated.png")
-        json_path = os.path.join(self.folder_path, f"{base_name}.json")
+        base_name, image_path, json_path, annotated_path = self._paths_for_image(target_name)
         old_scale = self.next_label.scale_factor
 
         if self.viewing_annotated_next:
@@ -754,6 +764,9 @@ class LabelNestsApp(QtWidgets.QWidget):
         Read LabelMe JSON, draw shapes onto the raw image via OpenCV,
         add a legend in the bottom-left corner, and save to <image>_annotated.png.
         """
+        if os.path.abspath(image_path) == os.path.abspath(output_path):
+            print("Annotated-only source image is already the output image; skipping regeneration.")
+            return True
         try:
             ok = generate_annotated_image(image_path, json_path, output_path)
             if ok:
@@ -771,10 +784,7 @@ class LabelNestsApp(QtWidgets.QWidget):
         After toggling, fit the result to viewport.
         """
         image_name = self.image_list[self.current_index]
-        base_name, _ = os.path.splitext(image_name)
-        image_path = os.path.join(self.folder_path, image_name)
-        annotated_path = os.path.join(self.folder_path, f"{base_name}_annotated.png")
-        json_path = os.path.join(self.folder_path, f"{base_name}.json")
+        base_name, image_path, json_path, annotated_path = self._paths_for_image(image_name)
 
         old_scale = self.main_label.scale_factor
         old_hscroll = self.main_scroll_area.horizontalScrollBar().value()
@@ -867,9 +877,7 @@ class LabelNestsApp(QtWidgets.QWidget):
         self.labelme_initial_json_data = None
 
         image_name = self.image_list[self.current_index]
-        image_path = os.path.join(self.folder_path, image_name)
-        base_name, _ = os.path.splitext(image_name)
-        json_path = os.path.join(self.folder_path, f"{base_name}.json")
+        base_name, image_path, json_path, annotated_path = self._paths_for_image(image_name)
 
         self.labelme_image_path = image_path
         self.labelme_json_path = json_path
@@ -878,7 +886,7 @@ class LabelNestsApp(QtWidgets.QWidget):
             print("No JSON file yet exists, checking if the previous day has annotations to load")
             if self.current_index > 0:
                 prev_name = self.image_list[self.current_index - 1]
-                prev_base, _ = os.path.splitext(prev_name)
+                prev_base = self._base_name_for_image(prev_name)
                 prev_json = os.path.join(self.folder_path, f"{prev_base}.json")
                 if os.path.exists(prev_json):
                     try:
@@ -930,12 +938,17 @@ class LabelNestsApp(QtWidgets.QWidget):
             self.labelme_process = None
             return
 
+        labelme_target = json_path if os.path.exists(json_path) else image_path
+
         if use_python_module:
             program = python_exe
-            arguments = ["-m", "labelme", image_path]
+            arguments = ["-m", "labelme", labelme_target]
         else:
             program = labelme_executable
-            arguments = [image_path]
+            arguments = [labelme_target]
+
+        if not os.path.exists(json_path):
+            arguments.extend(["--output", json_path])
 
         if labelmerc_path:
             arguments.extend(["--config", labelmerc_path])
@@ -948,6 +961,18 @@ class LabelNestsApp(QtWidgets.QWidget):
         venv_bin = os.path.dirname(python_exe)
         labelme_env = os.path.dirname(venv_bin)
         env.insert("PATH", venv_bin + os.pathsep + env.value("PATH"))
+        cache_dir = os.path.join("/tmp", "buzzanalysis-labelme-cache")
+        config_dir = os.path.join("/tmp", "buzzanalysis-labelme-config")
+        home_dir = os.path.join("/tmp", "buzzanalysis-labelme-home")
+        mpl_dir = os.path.join("/tmp", "buzzanalysis-matplotlib")
+        os.makedirs(cache_dir, exist_ok=True)
+        os.makedirs(config_dir, exist_ok=True)
+        os.makedirs(home_dir, exist_ok=True)
+        os.makedirs(mpl_dir, exist_ok=True)
+        env.insert("XDG_CACHE_HOME", cache_dir)
+        env.insert("XDG_CONFIG_HOME", config_dir)
+        env.insert("HOME", home_dir)
+        env.insert("MPLCONFIGDIR", mpl_dir)
         if python_exe == sys.executable:
             env.insert("QT_API", "pyside6")
         else:
@@ -1002,13 +1027,17 @@ class LabelNestsApp(QtWidgets.QWidget):
                 # Trigger refresh of data
                 image_path = self.labelme_image_path
                 json_path = self.labelme_json_path
-                annotated_path = os.path.splitext(image_path)[0] + '_annotated.png'
+                base_name = self._base_name_for_image(image_path)
+                annotated_path = os.path.join(os.path.dirname(image_path), f"{base_name}_annotated.png")
             
                 if os.path.exists(json_path):
                     self.store_post_labelme_json_state()
                     if self.labelme_initial_json_data != self.labelme_post_json_data:
-                        print("JSON file content has been changed, generating annotated image")
-                        self.generate_annotated_image(image_path, json_path, annotated_path)
+                        if os.path.abspath(image_path) == os.path.abspath(annotated_path):
+                            print("JSON file content changed; keeping existing annotated-only image unchanged.")
+                        else:
+                            print("JSON file content has been changed, generating annotated image")
+                            self.generate_annotated_image(image_path, json_path, annotated_path)
                     else:
                         print("JSON file content has not changed!")
                 else:

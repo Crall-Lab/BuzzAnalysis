@@ -7,8 +7,8 @@ def iter_files(root, suffix, strict_suffix=True):
             yield path
 
 def save_df(df, path, **to_csv_kw):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    os.makedirs(os.path.dirname(os.fspath(path)) or ".", exist_ok=True)
     df.to_csv(path, index=False, **to_csv_kw)
 
 def ensure_dir(path):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    os.makedirs(os.path.dirname(os.fspath(path)) or ".", exist_ok=True)

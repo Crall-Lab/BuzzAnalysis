@@ -13,6 +13,7 @@ from review_metrics_gui import (
     compute_interaction_count_table,
     compute_nest_component_tables,
     compute_nearest_neighbor_distance_table,
+    compute_raw_speed_table,
     compute_social_center_distance_table,
     distance_to_nest_component,
     ethogram_state_table,
@@ -25,7 +26,9 @@ from review_metrics_gui import (
     find_tracking_csv_by_pattern,
     find_related_csvs,
     find_tracking_csvs,
+    is_over_max_speed,
     load_noid_tags,
+    overlay_speed_value,
     social_center_from_tracking_paths,
     social_center_tracking_paths_for_sessions,
     tracking_csv_pattern,
@@ -179,6 +182,38 @@ def test_compute_activity_tables_respects_gui_cutoff_and_gap():
     assert classify_activity_value(act.loc[20, 1]) == "unknown"
 
 
+def test_raw_speed_table_preserves_values_that_max_speed_filter_marks_unknown():
+    tracking = pd.DataFrame(
+        {
+            "frame": [0, 1, 2],
+            "ID": [1, 1, 1],
+            "centroidX": [0.0, 10.0, 210.0],
+            "centroidY": [0.0, 0.0, 0.0],
+        }
+    )
+
+    act, filtered_speed = compute_activity_tables(
+        tracking,
+        frame_rate=5,
+        max_gap_seconds=3,
+        speed_cutoff=3.5,
+        max_speed_cutoff=50,
+    )
+    raw_speed = compute_raw_speed_table(
+        tracking,
+        frame_rate=5,
+        max_gap_seconds=3,
+    )
+
+    assert np.isclose(raw_speed.loc[1, 1], 10.0)
+    assert np.isclose(raw_speed.loc[2, 1], 200.0)
+    assert np.isnan(filtered_speed.loc[2, 1])
+    assert classify_activity_value(act.loc[2, 1]) == "unknown"
+    assert is_over_max_speed(raw_speed.loc[2, 1], 50)
+    assert not is_over_max_speed(raw_speed.loc[1, 1], 50)
+    assert overlay_speed_value(filtered_speed.loc[2, 1], raw_speed.loc[2, 1], True) == raw_speed.loc[2, 1]
+
+
 def test_metric_tables_compute_distances_and_interactions():
     tracking = pd.DataFrame(
         {
@@ -254,7 +289,7 @@ def test_social_center_tracking_paths_match_day_and_csv_pattern(tmp_path):
     assert paths == (csv_a.resolve(), csv_b.resolve())
 
 
-def test_nest_component_tables_use_shape_distances_and_ignore_arena():
+def test_nest_component_tables_use_shape_distances_and_ignore_broad_perimeters():
     tracking = pd.DataFrame(
         {
             "frame": [0, 0, 1],
@@ -265,12 +300,20 @@ def test_nest_component_tables_use_shape_distances_and_ignore_arena():
     )
     brood_map = pd.DataFrame(
         {
-            "object index": [0, 1, 2],
-            "label": ["Arena perimeter (polygon)", "Larvae (circles)", "Eggs (points)"],
-            "shape": ["polygon", "circle", "point"],
-            "x": [0.0, 10.0, 30.0],
-            "y": [0.0, 10.0, 30.0],
-            "radius": [np.nan, 2.0, np.nan],
+            "object index": [0, 1, 2, 3, 3, 3, 3],
+            "label": [
+                "Arena perimeter (polygon)",
+                "Larvae (circles)",
+                "Eggs (points)",
+                "Nest perimeter (polygon)",
+                "Nest perimeter (polygon)",
+                "Nest perimeter (polygon)",
+                "Nest perimeter (polygon)",
+            ],
+            "shape": ["polygon", "circle", "point", "polygon", "polygon", "polygon", "polygon"],
+            "x": [0.0, 10.0, 30.0, 0.0, 40.0, 40.0, 0.0],
+            "y": [0.0, 10.0, 30.0, 0.0, 0.0, 40.0, 40.0],
+            "radius": [np.nan, 2.0, np.nan, np.nan, np.nan, np.nan, np.nan],
         }
     )
 
@@ -418,6 +461,32 @@ class SequentialCapture:
         return True
 
 
+class StubTimer:
+    def __init__(self, active=False):
+        self.active = active
+        self.starts = []
+        self.stops = 0
+
+    def isActive(self):
+        return self.active
+
+    def start(self, interval):
+        self.active = True
+        self.starts.append(interval)
+
+    def stop(self):
+        self.active = False
+        self.stops += 1
+
+
+class StubButton:
+    def __init__(self):
+        self.text = ""
+
+    def setText(self, text):
+        self.text = text
+
+
 def test_sequential_frame_read_does_not_seek_between_adjacent_frames():
     window = ReviewHub.__new__(ReviewHub)
     capture = SequentialCapture()
@@ -429,6 +498,69 @@ def test_sequential_frame_read_does_not_seek_between_adjacent_frames():
     assert window.read_video_frame(0) == 0
     assert window.read_video_frame(1) == 1
     assert capture.set_calls == []
+
+
+def test_playback_started_from_last_frame_rewinds_before_starting():
+    window = ReviewHub.__new__(ReviewHub)
+    window.timer = StubTimer(active=False)
+    window.play_button = StubButton()
+    window.frame_count = 10
+    window.current_frame = 9
+    window.video_fps = 5
+    window._capture_needs_reset = False
+    targets = []
+
+    def seek_frame(frame):
+        targets.append(frame)
+        window.current_frame = frame
+        window._capture_needs_reset = False
+        return True
+
+    window.seek_frame = seek_frame
+
+    window.toggle_playback()
+
+    assert targets == [0]
+    assert window.current_frame == 0
+    assert window.timer.starts == [200]
+    assert window.play_button.text == "Pause"
+
+
+def test_stopping_on_last_frame_marks_capture_for_reset():
+    window = ReviewHub.__new__(ReviewHub)
+    window.timer = StubTimer(active=True)
+    window.play_button = StubButton()
+    window.frame_count = 3
+    window.current_frame = 2
+    window._capture_needs_reset = False
+
+    window.stop_playback()
+
+    assert not window.timer.isActive()
+    assert window.play_button.text == "Play"
+    assert window._capture_needs_reset is True
+
+
+def test_frame_read_after_end_reopens_instead_of_using_stale_cache():
+    window = ReviewHub.__new__(ReviewHub)
+    window.capture = object()
+    window._capture_next_frame = 3
+    window._capture_needs_reset = True
+    window._last_frame_index = 2
+    window._last_frame_bgr = "stale-frame"
+    reopen_calls = []
+
+    def read_frame_by_reopening(frame_index):
+        reopen_calls.append(frame_index)
+        return f"fresh-frame-{frame_index}"
+
+    window.read_frame_by_reopening = read_frame_by_reopening
+
+    assert window.read_video_frame(2) == "fresh-frame-2"
+    assert reopen_calls == [2]
+    assert window._last_frame_bgr == "fresh-frame-2"
+    assert window._capture_next_frame == 3
+    assert window._capture_needs_reset is False
 
 
 def test_assess_nest_map_status_finds_matching_brood_csv(tmp_path):
