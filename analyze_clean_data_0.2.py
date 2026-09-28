@@ -20,6 +20,7 @@ import argparse, json, os, sys, re, warnings
 from settings_io import read_settings, parse_with_overrides
 from inspect import getmembers, isfunction
 from multiprocessing import Pool
+from datetime import date as calendar_date
 from pathlib import Path
 # ── third-party ───────────────────────────────────────────────────────────
 import numpy as np
@@ -65,6 +66,11 @@ def cli():
                     help='Parallel workers (default 1 = serial)')
     ap.add_argument('-l','--limit', type=int, default=None,
                     help='Process only N files (debug)')
+    ap.add_argument('--social-center-by-date-folder', action='store_true',
+                    help=('Compute a separate social center for each nearest dated parent folder '
+                          '(YYYY-MM-DD or YYYY_MM_DD, optionally prefixed, e.g. col_1-2021-06-10). '
+                          'Search stops at --source; files without a dated folder are an error. '
+                          'Default: one center for the entire selected batch.'))
     ap.add_argument('--save-pivots', action='store_true',
                     help='Write *_pivot_enriched.feather per video')
     ap.add_argument('--save-frame-level', action='store_true',
@@ -181,6 +187,60 @@ def parse_recording_name(name: str, use_positions: bool = False):
     int(device)
     datetime.strptime(f"{date} {time}", "%Y-%m-%d %H-%M-%S")
     return device, date, time
+
+
+DATE_FOLDER_PATTERN = re.compile(
+    r"(?:^|[^0-9])(?P<year>\d{4})(?P<separator>[-_])"
+    r"(?P<month>\d{2})(?P=separator)(?P<day>\d{2})$"
+)
+
+
+def find_social_center_date_folder(file_path, source_root) -> Path:
+    """Find the nearest day folder, including source_root but never its parents.
+
+    Match a date at the end of the folder name so timestamped per-recording
+    folders created by the splitter do not become separate social-center groups.
+    Preserve the selected directory hierarchy, including any symlink aliases.
+    """
+    root = Path(os.path.abspath(Path(source_root).expanduser()))
+    folder = Path(os.path.abspath(Path(file_path).expanduser())).parent
+    if folder != root and root not in folder.parents:
+        raise ValueError(f"Tracking file {file_path} is outside source folder {root}")
+    while True:
+        match = DATE_FOLDER_PATTERN.search(folder.name)
+        if match is not None:
+            try:
+                calendar_date(int(match['year']), int(match['month']), int(match['day']))
+            except ValueError as exc:
+                raise ValueError(f"Invalid date in dated folder {folder}: {exc}") from exc
+            return folder
+        if folder == root:
+            break
+        folder = folder.parent
+    raise ValueError(
+        f"No dated folder found for {file_path} within {root}. "
+        "Use a folder ending in YYYY-MM-DD or YYYY_MM_DD "
+        "(for example col_1-2021-06-10), or omit --social-center-by-date-folder."
+    )
+
+
+def social_centers_for_files(files, source_root, by_date_folder=False):
+    """Map each selected file to its group's detection-weighted (X, Y) mean."""
+    groups = {}
+    # Resolve every group before reading data or producing any analysis output.
+    for file_path in files:
+        group = find_social_center_date_folder(file_path, source_root) if by_date_folder else None
+        groups.setdefault(group, []).append(file_path)
+
+    centers = {}
+    for group, group_files in groups.items():
+        stats = mean_centroids_across_files(group_files, chunksize=None)
+        center = (stats['mean_centroidX'], stats['mean_centroidY'])
+        label = str(group) if group is not None else 'entire batch'
+        print(f"Social center [{label}]: x={center[0]:.6g}, y={center[1]:.6g}; {len(group_files)} files")
+        for file_path in group_files:
+            centers[file_path] = center
+    return centers
 
 
 def pivot_clean(df: pd.DataFrame) -> pd.DataFrame:
@@ -856,13 +916,14 @@ def main():
     for path in files:
         parse_recording_name(Path(path).name, opt.get('filename_positions', False))
 
-    print("Calculating the social center from your data now...")
-    mean_sc_dict = mean_centroids_across_files(files, chunksize=None)
-    mean_x = mean_sc_dict["mean_centroidX"]
-    mean_y = mean_sc_dict["mean_centroidY"]
-    social_center = [mean_x, mean_y]
+    print("Calculating social centers from the selected tracking files...")
+    try:
+        social_centers = social_centers_for_files(
+            files, opt['source'], by_date_folder=opt['social_center_by_date_folder'])
+    except ValueError as exc:
+        sys.exit(str(exc))
 
-    it = [(fp, opt, funcs, social_center) for fp in files]
+    it = [(fp, opt, funcs, social_centers[fp]) for fp in files]
     if opt['cores'] > 1:
         with Pool(opt['cores']) as pool:
             results = list(tqdm(pool.imap_unordered(job, it),

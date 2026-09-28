@@ -35,6 +35,14 @@ Reviewed checkout: `testing_May25`, starting from commit `72a0eb5` plus the exis
 
 This review validates software behavior on regression fixtures and small complete workflows; it does not establish biological validity for a particular experiment or certify all historical scripts. Existing `runMe*` and older analysis variants remain available, but the current main entry point is `analyze_clean_data_0.2.py`. The new environment specification was checked against installed dependencies; a fresh Conda environment was not downloaded/rebuilt.
 
-Thresholds, FPS, calibration, and optional activity smoothing remain experimental choices. Main batch social-center calculation pools selected files, so keep a compatible colony/camera coordinate system per run. The preliminary raw-track workflow averages duplicate coordinates and can infer foraging from the rightmost arena unless `--no-infer-foraging` is supplied. Missing detections remain unknown; observed tag counts are not biological colony size.
+Thresholds, FPS, calibration, and optional activity smoothing remain experimental choices. Main batch social-center calculation pools selected files by default. With `--social-center-by-date-folder`, it uses one center per dated folder; keep a compatible colony/camera coordinate system within each group. The preliminary raw-track workflow averages duplicate coordinates and can infer foraging from the rightmost arena unless `--no-infer-foraging` is supplied. Missing detections remain unknown; observed tag counts are not biological colony size.
 
 The corrected geometry, inactivity, contact, and exclusion behavior can change earlier results. Re-run affected analyses from preserved input files and compare representative recordings before combining old and new outputs. Headless tests cover GUI logic; a complete interactive LabelMe editing session was not performed.
+
+## Dated-folder social centers — September 28, 2026
+
+Added `--social-center-by-date-folder` to `analyze_clean_data_0.2.py`. The nearest parent folder ending in a valid `YYYY-MM-DD` or `YYYY_MM_DD` date defines each group, including prefixed names such as `col_1-2021-06-10` and `col_01-2021-06-10`. Searches stop at the selected source directory. Recording folders with date/time names are skipped, separate folder paths with the same date remain separate, and ungroupable input files cause an error before analysis outputs are written.
+
+The existing detection-weighted centroid calculation runs once per group and supplies the group's `distSC` calculation in serial and parallel workers. Default whole-batch behavior and the combined output format are preserved. File selection and `--limit` are applied before the centers are computed; the terminal reports each center and contributing file count.
+
+Validation: **104 tests passed**, including 18 tests for supported folder formats, nested recordings, source boundaries, invalid dates, separate colonies, weighting, `--limit`, actual serial/parallel output values, default behavior, and error handling. The updated manual was rebuilt and verified to remain exactly three pages.

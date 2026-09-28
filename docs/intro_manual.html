@@ -37,7 +37,7 @@ conda env create -f environment.yml
 conda activate BuzzAnalysis</pre>
 <p>On August’s computer, the reviewed checkout is <code>/home/august/Desktop/new_colony_development/BuzzAnalysis</code>. Open that folder and activate its existing <code>BuzzAnalysis</code> environment. The supplied environment file targets Python 3.13 and includes analysis, plotting, GUI, and test dependencies. Shapely 2 and PyArrow are needed for current geometry and binary-table exports.</p>
 <h2>Prepare one experiment</h2>
-<p>Keep original data separately and work on a copy. Put tracking CSVs and matching videos together, with nest images/annotations in a labels folder. Process one colony or compatible camera coordinate system at a time: the main batch runner computes one social center across the selected input files.</p>
+<p>Keep originals separately and work on a copy. Store tracking CSVs with matching videos and nest annotations in a labels folder. Analysis pools one social center by default. Add <code>--social-center-by-date-folder</code> for separate centers under <code>2021-06-10</code>, <code>2021_06_10</code>, or <code>col_01-2021-06-10</code>-style folders, including deeper recordings. Keep a compatible colony/camera coordinate system within each group; see the README for details.</p>
 <table>
 <tr><th>Input</th><th>What it contains</th></tr>
 <tr><td>Tracking CSV&nbsp;&nbsp;</td><td>Required columns: <code>frame</code>, <code>ID</code>, <code>centroidX</code>, <code>centroidY</code>. Frames and IDs are integers; positions are pixels. <code>frontX/frontY</code> are optional.</td></tr>

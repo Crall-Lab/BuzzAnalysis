@@ -33,6 +33,25 @@ Tracking CSVs require `frame`, `ID`, `centroidX`, and `centroidY`. Frame numbers
 
 `Analysis.csv` contains one row per bee/video/side. Optional frame-level CSVs are saved beside the cleaned recordings. `--save-pivots` additionally exports enriched Feather tables. Use `-e` to select a different input suffix, `-b /path/to/labels` for nest maps, `-l 1` for a small first run, and `-c 4` for parallel processing.
 
+## Social center per dated folder
+
+Use `--social-center-by-date-folder` to calculate a separate social center for each dated folder while still producing one combined analysis CSV:
+
+```bash
+python analyze_clean_data_0.2.py \
+  -s "/path/to/parent-folder" \
+  --social-center-by-date-folder \
+  -o "/path/to/results/Analysis.csv"
+```
+
+For example, every matching tracking file beneath `parent/2021-06-10/` shares one center, and files beneath `parent/2021-06-11/` share another. Tracking files can be nested further inside recording folders.
+
+The nearest parent folder whose name ends in a valid `YYYY-MM-DD` or `YYYY_MM_DD` date defines the group. Names such as `col_1-2021-06-10` and `col_01-2021-06-10` are supported. Timestamped recording folders such as `bumblebox-05_2021-06-10_12_00_00` are skipped when finding the day folder. The search includes `--source` itself and stops there.
+
+Groups use the full folder path: `colony-a/2021-06-10/` and `colony-b/2021-06-10/` have separate centers. Files without a dated parent cause an error before output is written. Use a consistent colony/camera coordinate system within each dated folder.
+
+The center is the mean of the selected detections' X/Y coordinates, so recordings contribute in proportion to their valid detection rows. File filters (`-e`, `-l`) also limit which data contribute to a center. Each group's center and file count are printed, and the center is used for that group's `distSC` metric in both serial and parallel runs. Without the flag, all selected files share one batch-wide center. This flag applies to the main batch analysis, not the GUI's separate social-center display.
+
 ## Review and settings
 
 ```bash
@@ -42,7 +61,7 @@ python LabelNests_GUI.1.16.py /path/to/labels
 
 In the review GUI, select a matching tracking CSV under **Metric Controls**, inspect videos, and **Export settings**. Both cleanup and analysis accept `--settings settings.json`. Explicit CLI options override JSON values, which override defaults.
 
-Check FPS, pixel calibration, thresholds, and smoothing against your recordings. Run a compatible colony/camera coordinate system per batch: the main runner pools selected files for its social center. Missing activity is unknown, not inactive. Contacts describe proximity, not verified biological interactions. The manual explains units and output meanings.
+Check FPS, pixel calibration, thresholds, and smoothing against your recordings. Use a compatible colony/camera coordinate system for each social-center group (the entire batch by default, or each dated folder with the flag above). Missing activity is unknown, not inactive. Contacts describe proximity, not verified biological interactions. The manual explains units and output meanings.
 
 ## Preliminary activity-transition workflow
 
@@ -57,6 +76,6 @@ QT_QPA_PLATFORM=offscreen python -m pytest -q
 QT_QPA_PLATFORM=offscreen python docs/build_manual.py
 ```
 
-The reviewed code passes 86 tests, including complete CLI workflows and plot generation. The manual builder uses installed PySide6 and rejects content that would overflow its three PDF pages. Review scope, corrected result-affecting issues, and tested dependency versions are recorded in [the review report](docs/review_report.md).
+The test suite covers complete CLI workflows, plot generation, and social-center grouping. The manual builder uses installed PySide6 and rejects content that would overflow its three PDF pages. Review scope, corrected result-affecting issues, and tested dependency versions are recorded in [the review report](docs/review_report.md).
 
 Historical `runMe*.py`, `analyze_data_0.1.py`, and `analyze_clean_data_0.1.py` scripts remain available. Start new analyses with `analyze_clean_data_0.2.py`. The coordinate-only `03_compute_intermediates.py` / `04_aggregate_video_means.py` route is optional; brood-aware analysis uses the main runner.
